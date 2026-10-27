@@ -1,0 +1,51 @@
+# SysML Parallel TVCache — project agent rules
+
+Learned from CURSOR_HANDOFF.md, m4999 smoke evidence, and Gary's characterization workflow.
+
+## Deployment boundaries
+
+- NERSC is inference-only. Harbor / Pi / task / verifier run on the Mac via Docker.
+- Use only m4999 GPU credits (`--account=m4999 --constraint=gpu`). Never fall back to ntrain5.
+- Proven allocation shape: 1 GPU, 32 CPUs, 56G, `shared_interactive`, ≤20 minutes. Request once; release promptly.
+- Preserve FlashInfer workaround until retested: node-local JIT caches and `VLLM_USE_FLASHINFER_SAMPLER=0`.
+- Valid vLLM flag: `--default-chat-template-kwargs` (not `--chat-template-kwargs`).
+
+## Evidence honesty
+
+- Reward 0 with `exception_info=null` is a correctly graded unsuccessful task, not infrastructure success by itself.
+- A numeric reward alone does not prove agent execution succeeded; inspect Pi session, backend status, and verifier.
+- Report observed lack of tool calls / parallel calls honestly. Do not force tool calls or alter tasks to manufacture parallelism.
+- Preserve existing `results/` and `jobs/` evidence. Do not delete during cleanup. Do not commit secrets from `.local-smoke/`.
+
+## Characterization conventions
+
+- Characterization does not depend on Rust TVCache integration.
+- Current turn = each saved assistant message, including valid zero-call turns.
+- Overall parallel-turn fraction = turns with >1 emitted call / all assistant turns.
+- Per-tool rows count that tool's calls over the same all-turn denominator; a read+bash turn is not a multi-read turn. Label this explicitly.
+- Use an explicit campaign manifest for run selection. Do not glob all of `jobs/` as a clean dataset.
+- Pi `tool_execution_start` events are not actual execute overlap; instrument execute entry/exit later.
+- Cache integration is later work; uncached pilots use `hit=false` / `cache_mode=none`.
+
+## Dual-model comparison (team split)
+
+- Gary: `Qwen/Qwen3.5-9B` on NERSC (m4999) + Mac Harbor/Pi.
+- Teammate: Qwen3-4B-Instruct locally.
+- Hold constant: Harbor/Pi harness version, task ids/variants, grading, cache mode (`none` for characterization), and analysis denominators.
+- Vary: model only. Report parallel-turn fraction and calls-per-turn CDF **per model** as well as pooled, and state whether tool-call patterns differ a lot.
+- Agree the shared task list and attempt budget before scaling either side. Do not silently diverge on prompts, max_turns, thinking mode, or task variants.
+
+## Model changes
+
+- Do not blindly rename the model in one file. Update sbatch helper, gateway `--model`, `SYSML_MODEL_ID`, LoopbackPi probe/limits, and Harbor `-m` together.
+- Installed remote stack: vLLM 0.31.0. `Qwen/Qwen3.5-9B` needs a Qwen3.5-capable vLLM (tool parser `qwen3_coder`; prefer `--language-model-only` for text DeepSWE). Validate/upgrade before GPU spend.
+- `Qwen/Qwen3.8-27B` remains deferred until that newer stack is proven.
+
+## Placeholders the human must fill
+
+Any live run needs fresh values for: SSH proxy freshness, `SYSML_REMOTE_ROOT`, Slurm account, `SYSML_ALLOC_NODE`, tunnel ports, gateway volume name, compose overlay path, gateway env file, job name, and model records directory. Historical nid/volume/port names from prior jobs are provenance only.
+
+## Sharing
+
+- Never share `.local-smoke/`, `.env`, `jobs/`, or raw `results/` wholesale.
+- Teammate pack: `bash scripts/pack_team_share.sh`. See `docs/TEAM_SHARE.md`.

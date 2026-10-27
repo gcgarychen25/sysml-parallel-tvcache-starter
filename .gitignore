@@ -1,0 +1,44 @@
+# Secrets and local runtime (never share)
+.env
+.env.*
+!.env.example
+.local-smoke/
+**/secrets/
+*api-key*
+*.pem
+*.key
+
+# Python / tooling
+.venv/
+.uv-cache/
+.cargo-cache/
+*.egg-info/
+__pycache__/
+.pytest_cache/
+*.pyc
+.mypy_cache/
+.ruff_cache/
+
+# Upstream checkouts and heavy caches (re-fetch with setup script)
+vendor/*
+!vendor/.gitkeep
+
+# Private experiment evidence (keep locally; do not zip/share wholesale)
+jobs/
+results/
+rollouts/
+logs/
+*.log
+model-records/
+*-model-records/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Optional local scratch / pack output
+.tmp/
+.share-staging/
+dist/

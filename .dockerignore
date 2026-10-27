@@ -1,0 +1,6 @@
+**
+!parallel_tvcache/
+!parallel_tvcache/inference/
+!parallel_tvcache/inference/model_transport.py
+!configs/
+!configs/model-gateway.Dockerfile
