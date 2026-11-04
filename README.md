@@ -79,14 +79,17 @@ artifacts/
 docs/
   project_assignment.pdf
   workload_characterization_report.md      Exp A cells A0–A2 (one table; extend by row)
+  parallel_prompt_stress_report.md         MLX forced-parallel prompt stress (not natural Exp A)
 parallel_tvcache/         Harbor/Pi adapters, model transport, measurement, cache prototype
 variants/                 Harbor task dirs (instruction + thin image); see below
-configs/                  example.env · experiment-tasks.txt · model-gateway.Dockerfile · models/ (A0–A2 env examples)
+configs/                  example.env · experiment-tasks.txt · experiment-tasks-parallel-stress.txt · models/
 scripts/
   setup_repositories.sh       clone vendor deps
   prepare_task.py             rebuild a task variant under variants/
-  run_experiment.sh           only runner you need: mode = none|sequential|parallel|all
-  run_harbor_wave.sh          NERSC + Harbor pass@k with n=k=seqs (default 5)
+  prepare_parallel_stress.py  prepend max-parallel instruction (stress only; not Exp A)
+  run_mlx_parallel_stress.sh  local MLX forced-parallel stress wave
+  run_experiment.sh           mode = none|sequential|parallel|all; add --parallel-test for stress
+  run_harbor_wave.sh          NERSC + Harbor (Exp A default; --parallel-test sets MultitoolLoopbackPi)
   nersc_serve_model.sbatch    vLLM on NERSC (reads SYSML_MAX_NUM_SEQS, etc.)
   monitor_nersc_gpu.sh        poll nvidia-smi on the live alloc (GPU memory)
   monitor_vllm_metrics.sh     poll vLLM /metrics (KV% / Running / Waiting) via tunnel
@@ -182,7 +185,7 @@ bash scripts/run_experiment.sh none   # prefer Terminal.app / screen
 | --- | --- |
 | Exp A (`none`) | Cells **A0–A2** in the report — reward 0 on 9B; Gary retries with a **stronger ~27B** tonight |
 | Exp B sequential TVCache | **Start anytime** — wire `tvclient` on Pi tool-execute; use `none` A0/A1 as no-cache baseline |
-| Exp C | Wait until parallel-turn > 0 |
+| Exp C | Wait until parallel-turn > 0 on **natural** Exp A; stress surface already >0 — see `docs/parallel_prompt_stress_report.md` |
 
 ### Experiment A — historical 3-task cell (2026-10-30)
 
