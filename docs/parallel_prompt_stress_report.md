@@ -20,8 +20,9 @@ Analyze: `bash scripts/analyze_characterization_wave.sh <prefix>`.
 | **Forced parallel · 1 task** | max-parallel | `stress-mlx-maxparallel-1task` | katex ×1 | 1/1 | 0 | **0.077** (1/13) | **23** | one huge explore turn |
 | **Forced parallel · 10 tasks** | max-parallel | `stress-mlx-maxparallel-10t` | 10 DeepSWE ×1 | 10/10 | 0 | **0.170** (15/88) | **23** | katex-style 23-call turn present |
 | **Forced parallel · partial 113** | max-parallel | `stress-mlx-maxparallel-all113` | **41/113** attempted | **40**/41 | **0** | **0.370** (71/192) | **16** | **main run** · stopped early; 1 empty session |
+| **Forced parallel · NERSC 27B** | max-parallel | `stress-27b-happydom-tp4-k5-xh` | happy-dom ×**k=5** | **5**/5 | **0** | **0.392** (104/265) | **5** | Qwen3.8-27B · MultitoolLoopbackPi · TP4/256K/250 · f2p **0/14** all; 1× `AgentTimeoutError` |
 
-Vs Exp A natural (`char-setup-10t-k5` on NERSC 9B): parallel **0/199**. Forced-parallel prompt lifts MLX 4B from **0% → ~17–37%** on this harness — still not natural DeepSWE behavior.
+Vs Exp A natural (`char-setup-10t-k5` on NERSC 9B): parallel **0/199**. Forced-parallel prompt lifts MLX 4B from **0% → ~17–37%** on this harness — still not natural DeepSWE behavior. NERSC **27B** forced stress ≈ **39%** parallel-turn on happy-dom (vs A3 natural Pi ~4.8%).
 
 ---
 

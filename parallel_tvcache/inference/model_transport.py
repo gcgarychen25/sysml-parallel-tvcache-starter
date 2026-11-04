@@ -16,7 +16,9 @@ import socketserver
 import time
 import uuid
 
-MAX_REQUEST_BYTES = 2 * 1024 * 1024
+# Mini-SWE / long thinking prompts can exceed 2 MiB; keep a headroom under
+# typical reverse-proxy limits so sandbox→gateway POSTs are not rejected.
+MAX_REQUEST_BYTES = 32 * 1024 * 1024
 ALLOWED_ROUTES = {('GET', '/v1/models'), ('POST', '/v1/chat/completions')}
 
 

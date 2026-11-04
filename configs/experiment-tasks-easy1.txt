@@ -1,0 +1,2 @@
+# Exp A easier-task isolation (A3b / B1 / B2): one DeepSWE setup variant × pass@5.
+happy-dom-abort-pending-body-reads

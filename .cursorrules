@@ -14,7 +14,7 @@ Teammate-facing docs: root `README.md` only. Exp A evidence: single `docs/worklo
 - Resume a live NERSC serve with `SYSML_ATTACH_JOB` + `SYSML_ATTACH_NODE` (after `bridge_up` is defined). Do not `scancel` a READY alloc just because the Mac runner died.
 - Default wave: `SYSML_PASS_K=5`, `SYSML_HARBOR_N=5`, `SYSML_MAX_NUM_SEQS=5`, `SYSML_GPU_MEMORY_UTILIZATION=0.80`, tasks from `configs/experiment-tasks.txt` (10 setup variants). Recycle alloc every `SYSML_TASKS_PER_ALLOC` (default 2). GPU monitor: `scripts/monitor_nersc_gpu.sh` / `gpu-monitor.log`.
 - Do not confuse knobs: `SYSML_MAX_MODEL_LEN` / `SYSML_CONTEXT_WINDOW` = total prompt+history capacity; `SYSML_MAX_TOKENS` = **per-completion** generation cap; `SYSML_MAX_TURNS` = assistant **turn** ceiling (not tokens). Reward 0 + turn exhaustion ≠ “ran out of 256K context.”
-- Exp A **A0–A2** (9B) reward **0**; prefer TP=2 at 256K. **A3 done:** `Qwen/Qwen3.8-27B` clack pass@5 prefix `char-qwen38-27b-clack-t250-xh` — thinking=`xhigh` (not `high`), TP=4 / 256K / n=k=5; reward **0** but f2p≈**48.4/82**, parallel-turn≈0.048 (`docs/workload_characterization_report.md`). Env `configs/models/qwen3.8-27b-pilot1-clack.env.example`. Quarantined invalid `thinking=high` wave. Harbor rejects bare `thinking=on`. Mac Docker: 2×n=5 → `TASK_PARALLEL=1` or n≤3; Prefer Terminal.app / `screen -dmS`. Fresh `sshproxy` before live waves.
+- Exp A **A0–A2** (9B) reward **0**; **A3** clack×27B Pi done (f2p≈48/82, reward 0). **Isolation (mode none, happy-dom):** **B1** Mini-SWE×27B DONE — 5/5 reward 0, all `AgentTimeoutError` @10800s, f2p **0/14** (p2p 165/165), no commit/submit, never opened `AsyncTeardown.test.ts` (not harness/API break). **B2** Flash-Next **skipped** (A100-40GB). **A3b** Pi×27B baseline still TBD. Envs `qwen3.8-27b-happydom-pi`, `…-miniswe`, `qwen3.8-flash-happydom-pi`; tasks `configs/experiment-tasks-easy1.txt`. Not Exp B TVCache.
 
 ## Evidence honesty
 
@@ -28,9 +28,17 @@ Teammate-facing docs: root `README.md` only. Exp A evidence: single `docs/worklo
 - Parallel-turn fraction = turns with >1 emitted call / all assistant turns (incl. zero-call).
 - Analyze with `bash scripts/analyze_characterization_wave.sh <prefix>` — do not glob unrelated `jobs/`.
 - TVCache key = trajectory prefix in the TCG. Paper win = cross-rollout reuse (Exp B). Within-turn N>1 is Exp C.
+- Forced-parallel stress (`MultitoolPi` / `SYSML_PARALLEL_STRESS` / `--parallel-test`, PR #1) is **not** Exp A natural rate. Cite `docs/parallel_prompt_stress_report.md` separately. Soft prompt (“parallel when appropriate”) for ≥27B; hard “AS MANY” only for emission stress. Exp C also needs **cache hits on parallel-tool turns**, not just parallel-turn %.
+- When the goal is **solve + parallel stress**, keep proven capability knobs (27B: **4 GPU / TP=4 / 256K / 250 turns / k=5**). Do not cut context/turns just to fit 2 GPUs — allocate more GPUs instead.
+- Parallel-turn metric = **model-emitted** >1 tool_call in one assistant message (not wall-clock overlap). Mini-SWE **does** accept multi-`bash` in one turn (B1: 84/378, always n=2); default agent executes them **sequentially** (`for action in actions`). Stock Harbor mini prompt does not push MULTIPLE; Qwen3.8-27B still emitted pairs. `analyze_characterization_wave.py` only reads Pi `*.jsonl` — Mini-SWE needs ATIF / `mini-swe-agent.trajectory.json`.
 
 ## Model / runner sync
 
 - When changing model id, update sbatch, gateway `--model`, `SYSML_MODEL_ID`, LoopbackPi, and Harbor `-m` together.
-- Active pilot model: `Qwen/Qwen3.8-27B` (tool parser `qwen3_coder`). Prior Exp A cells remain `Qwen/Qwen3.5-9B`. Keep sbatch, gateway `--model`, `SYSML_MODEL_ID`, LoopbackPi, and Harbor `-m` in sync on every swap.
+- Harbor agent: **default Pi** (`LoopbackPi`) for Exp A/B/C + TVCache (`tvclient` on Pi tool-execute). Mini-SWE (`LoopbackMiniSwe`) is optional isolation only — also emits multi-tool turns but bash-only, sequential exec, weaker analyzer/TVCache fit. Do not switch primary harness for parallel emission alone.
+- Harbor 0.24 mini-swe install needs `--with mcp` (litellm tools path); local patch on `uv tool` harbor until upgrade pulls main's `litellm[mcp]`. Re-apply after `uv tool upgrade harbor`.
+- Active pilot model: `Qwen/Qwen3.8-27B` (tool parser `qwen3_coder`); B2 uses `Qwen/Qwen3.8-Flash-Next-FP8`. Prior Exp A cells remain `Qwen/Qwen3.5-9B`.
 - Qwen3.8 reasoning effort ≠ 9B: vLLM rejects `high`. Use Harbor `SYSML_THINKING` ∈ `xhigh`|`medium`|`low` only.
+- Live Harbor waves need the **Mac awake** (tunnel + Docker). Laptop sleep → stop Mac wave + `scancel` interactive GPU jobs; NERSC CPU downloads (e.g. `sysml-hf-flash`) can keep going.
+- Kill a stuck Mac wave with `kill -9` on the wave/harbor PIDs if you must preserve a READY NERSC alloc — bash `EXIT` trap in `run_harbor_wave.sh` runs `scancel`.
+- Qwen3.8-Flash-Next-FP8 on Perlmutter A100 (SM80): Triton/DeepGEMM FP8 MoE need SM≥8.9. Try `--moe-backend marlin` (+ often `--enable-expert-parallel`); plain TP4+triton fails. Official recipe is Hopper H100/H200 TEP.

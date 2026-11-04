@@ -1,7 +1,7 @@
 # Experiment A — workload characterization
 
-**Mode:** `none` (no TVCache) · **Models:** `Qwen/Qwen3.5-9B` (A0–A2) · `Qwen/Qwen3.8-27B` (A3) · **Reproduce:** root `README.md`  
-**Tasks:** DeepSWE setup variants under `variants/deep-swe-setup/` (`configs/experiment-tasks.txt` = 10-task list; A3 uses 1-task pilot list).  
+**Mode:** `none` (no TVCache) · **Models:** `Qwen/Qwen3.5-9B` (A0–A2) · `Qwen/Qwen3.8-27B` (A3/A3b/B1) · `Qwen/Qwen3.8-Flash-Next-FP8` (B2) · **Reproduce:** root `README.md`  
+**Tasks:** DeepSWE setup variants under `variants/deep-swe-setup/` (`configs/experiment-tasks.txt` = 10-task list; A3 = clack; A3b/B1/B2 = happy-dom via `configs/experiment-tasks-easy1.txt`).  
 **How to extend:** add one row to **Cells** (+ optional one-line note under **Notes**). Published pack: `artifacts/expA-traces-A0-A2.zip` (unzip at repo root). Local full runs stay in gitignored `jobs/` / `results/`.
 
 ---
@@ -15,9 +15,12 @@
 | **A2a** | `char-pilot1-clack-t500` | 256K / 500 / 16K | off | 4 | clack ×5 | 5/5 | **0** | ~0 | capability (clean `stop`) | ~147K | f2p≈0.2/82 |
 | **A2b** | `char-think1b-clack-t250` | 256K / 250 / 32K | **high** | 4 | clack ×5 | 5/5 | **0** | ~0 | capability | ~144K | f2p≈5.6/82; KV~3–11% |
 | **A2c** | `char-kvpack-tp2-think-high-n10` | 256K / 250 / 32K | **high** | **2** | clack ×5 (httpx Docker-fail) | 5/5 | **0** | ~0.002 | capability | ~131K | f2p≈7.0/82; KV peak **~27%**; prefer **TP=2** |
-| **A3** | `char-qwen38-27b-clack-t250-xh` | 256K / 250 / 32K | **xhigh** | **4** | clack ×5 · **27B** | 5/5 | **0** | **0.048** (19/397) | capability | ~179K | f2p≈**48.4/82**; tools=412; 1 stream-end error (12-turn trial); invalid prior `thinking=high` wave quarantined |
+| **A3** | `char-qwen38-27b-clack-t250-xh` | 256K / 250 / 32K | **xhigh** | **4** | clack ×5 · **27B** · Pi | 5/5 | **0** | **0.048** (19/397) | capability | ~179K | f2p≈**48.4/82**; tools=412; 1 stream-end error (12-turn trial); invalid prior `thinking=high` wave quarantined |
+| **A3b** | `char-qwen38-27b-happydom-t250-xh` | 256K / 250 / 32K | **xhigh** | **4** | happy-dom ×5 · **27B** · Pi | TBD | TBD | TBD | harness baseline | TBD | easier-task Pi baseline for B1/B2; env `qwen3.8-27b-happydom-pi` |
+| **B1** | `char-qwen38-27b-msa-happydom-t250-xh` | 256K / 250 / 32K | **xhigh** | **4** | happy-dom ×5 · **27B** · **Mini-SWE** | **0** | **0/14** f2p (p2p 165/165) | **≈22.2%** (84/378) | harness vs A3b | DONE | All 5× `AgentTimeoutError` @ **10800s**; no submit/commit; never touched `AsyncTeardown.test.ts`. Infra OK (API+tools); incomplete fix. `LoopbackMiniSwe`. |
+| **B2** | Flash-Next-FP8 | — | — | — | — | — | — | — | — | **skipped** | Perlmutter 4×A100-40GB: Triton MoE unsupported; marlin loads then OOM + PLE `fp8e4nv`. Need Hopper/≥64–80GB. |
 
-Env examples: `configs/models/qwen3.5-9b-pilot.env.example` (A0) · `…-a1-tp4-256k.env.example` (A1) · `…-a2-pilot1-t500` / `…-think-pilot1-clack` / `…-kvpack-tp2-think-high` (A2*) · `…/qwen3.8-27b-pilot1-clack.env.example` (A3).
+Env examples: `configs/models/qwen3.5-9b-pilot.env.example` (A0) · `…-a1-tp4-256k.env.example` (A1) · `…-a2-pilot1-t500` / `…-think-pilot1-clack` / `…-kvpack-tp2-think-high` (A2*) · `…/qwen3.8-27b-pilot1-clack.env.example` (A3) · `…/qwen3.8-27b-happydom-pi` (A3b) · `…/qwen3.8-27b-happydom-miniswe` (B1) · `…/qwen3.8-flash-happydom-pi` (B2).
 
 Analyze: `bash scripts/analyze_characterization_wave.sh <prefix>`.
 
@@ -30,7 +33,8 @@ Analyze: `bash scripts/analyze_characterization_wave.sh <prefix>`.
 3. **thinking=high** lifts F2P on 9B clack but **never reward=1**; on **Qwen3.8-27B** use **`xhigh`** (not `high` — vLLM 400).
 4. **Serve:** 9B 256K×n=5 fits **TP=2**; **27B** pilot used **TP=4** / 256K / n=5 successfully.
 5. **TCG exact-prefix reuse** drops as traces lengthen (A0 ~10% → A1 ~0.6%) → Exp B may need softer / early-turn keys.
-6. **A3 capability:** avg f2p **~48/82** (vs ~7/82 on best 9B) but **reward still 0** on clack pass@5. Exp B can proceed in parallel (see README).
+6. **A3 capability:** avg f2p **~48/82** (vs ~7/82 on best 9B) but **reward still 0** on clack pass@5.
+7. **Harness × model isolation (A3b/B1/B2):** same easier task (`happy-dom`) × pass@5; change one of harness (Pi→Mini-SWE) or model (27B→Flash-Next-FP8). Still mode `none` — not Exp B TVCache.
 
 ---
 
@@ -52,3 +56,4 @@ Analyze: `bash scripts/analyze_characterization_wave.sh <prefix>`.
 - **A1:** ~6 h wall; 5 Slurm recycles; 49/50 sessions hit turns=100 then stub `error`; 153× mid-turn `length` at output=2048. Artifacts: `…/char-setup-10t-ctx256k-t100/`.
 - **A2c:** intended 2 Harbor tasks; only clack graded. Summary JSON: `…/char-kvpack-tp2-think-high-n10/tp2_pilot_summary.json`.
 - **A3:** `Qwen/Qwen3.8-27B`, thinking=`xhigh`, ~4h wall (job `60724155`). Summary: `…/char-qwen38-27b-clack-t250-xh/pilot_summary.json`. Do not use quarantined `char-qwen38-27b-clack-t250` (`thinking=high` → turn-1 400s).
+- **A3b/B1/B2:** task list `configs/experiment-tasks-easy1.txt`; agent switch via `SYSML_HARBOR_AGENT` in `scripts/run_harbor_wave.sh`. Flash-Next download: `scripts/download_qwen3_8_flash_next_fp8.py`. Fill Rew>0 / F2P after each wave DONE.

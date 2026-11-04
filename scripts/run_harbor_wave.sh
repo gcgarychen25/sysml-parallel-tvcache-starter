@@ -19,6 +19,15 @@ export SYSML_MAX_TURNS="${SYSML_MAX_TURNS:-8}"
 export SYSML_THINKING="${SYSML_THINKING:-off}"
 export PI_VERSION="${PI_VERSION:-1.4.0}"
 export SYSML_MAX_TOKENS="${SYSML_MAX_TOKENS:-2048}"
+# Harbor agent: pi (LoopbackPi) or mini-swe-agent (built-in).
+HARBOR_AGENT="${SYSML_HARBOR_AGENT:-pi}"
+case "$HARBOR_AGENT" in
+  pi|mini-swe-agent) ;;
+  *)
+    echo "SYSML_HARBOR_AGENT must be pi|mini-swe-agent (got: $HARBOR_AGENT)" >&2
+    exit 2
+    ;;
+esac
 CACHE_MODE="${SYSML_CACHE_MODE:-none}"
 PREFIX="${SYSML_JOB_PREFIX:-char-setup-10t-k5}"
 # Default Exp A agent; override with SYSML_AGENT or SYSML_PARALLEL_STRESS=1.
@@ -57,7 +66,7 @@ if ! [[ "$TASK_PARALLEL" =~ ^[1-9][0-9]*$ ]]; then
 fi
 SERVE_WAIT_ITERS="${SYSML_SERVE_WAIT_ITERS:-360}"
 # Harbor Pi accepts: off|minimal|low|medium|high|xhigh|max (not bare "on").
-# Alias on -> high for convenience.
+# Alias on -> high for convenience. Qwen3.8 vLLM rejects high — use xhigh|medium|low.
 case "${SYSML_THINKING}" in
   on) SYSML_THINKING=high ;;
 esac
@@ -73,6 +82,14 @@ if [[ "$SYSML_THINKING" == "off" ]]; then
   ENABLE_THINKING=false
 else
   ENABLE_THINKING=true
+fi
+# mini-swe-agent reasoning_effort: Qwen3.8 accepts xhigh|medium|low only.
+MSA_REASONING_EFFORT=""
+if [[ "$HARBOR_AGENT" == "mini-swe-agent" && "$SYSML_THINKING" != "off" ]]; then
+  case "$SYSML_THINKING" in
+    xhigh|medium|low) MSA_REASONING_EFFORT="$SYSML_THINKING" ;;
+    high|max|minimal) MSA_REASONING_EFFORT=xhigh ;;
+  esac
 fi
 TASK_ROOT="${SYSML_TASK_ROOT:-$ROOT/variants/deep-swe-setup/tasks}"
 TASK_LIST="${SYSML_TASK_LIST:-$ROOT/configs/experiment-tasks.txt}"
@@ -107,6 +124,11 @@ load_tasks() {
 
 load_tasks
 
+if [[ "${SYSML_PARALLEL_STRESS:-0}" == "1" && "$HARBOR_AGENT" != "pi" ]]; then
+  echo "SYSML_PARALLEL_STRESS requires SYSML_HARBOR_AGENT=pi (MultitoolLoopbackPi)" >&2
+  exit 2
+fi
+
 if [[ "${SYSML_PARALLEL_STRESS:-0}" == "1" && "${SYSML_PREPARE:-1}" == "1" ]]; then
   echo "=== prepare parallel-stress variants → $TASK_ROOT ===" | tee -a "$LOG"
   python3 "$ROOT/scripts/prepare_parallel_stress.py" \
@@ -116,7 +138,7 @@ if [[ "${SYSML_PARALLEL_STRESS:-0}" == "1" && "${SYSML_PREPARE:-1}" == "1" ]]; t
     --force | tee -a "$LOG"
 fi
 
-echo "PREFIX=$PREFIX AGENT=$AGENT K=$K N=$N MAX_NUM_SEQS=$MAX_NUM_SEQS MAX_LEN=$MAX_LEN CTX=$SYSML_CONTEXT_WINDOW TURNS=$SYSML_MAX_TURNS THINKING=$SYSML_THINKING GPU_MEM=$GPU_MEM GPUS=$GPUS TP=$TP_SIZE MEM=$MEM CPUS=$CPUS_PER_TASK QOS=$SLURM_QOS MODE=$CACHE_MODE tasks=${#tasks[@]} per_alloc=$TASKS_PER_ALLOC task_parallel=$TASK_PARALLEL" | tee -a "$LOG"
+echo "PREFIX=$PREFIX HARBOR_AGENT=$HARBOR_AGENT AGENT=$AGENT K=$K N=$N MAX_NUM_SEQS=$MAX_NUM_SEQS MAX_LEN=$MAX_LEN CTX=$SYSML_CONTEXT_WINDOW TURNS=$SYSML_MAX_TURNS THINKING=$SYSML_THINKING GPU_MEM=$GPU_MEM GPUS=$GPUS TP=$TP_SIZE MEM=$MEM CPUS=$CPUS_PER_TASK QOS=$SLURM_QOS MODE=$CACHE_MODE tasks=${#tasks[@]} per_alloc=$TASKS_PER_ALLOC task_parallel=$TASK_PARALLEL" | tee -a "$LOG"
 echo "REMOTE_ROOT=$REMOTE_ROOT NERSC_USER=$NERSC_USER SSH_HOST=$SSH_HOST ACCOUNT=$SLURM_ACCOUNT TASK_LIST=$TASK_LIST TASK_ROOT=$TASK_ROOT" | tee -a "$LOG"
 
 for task in "${tasks[@]}"; do
@@ -303,21 +325,40 @@ PY
 run_task() {
   local task="$1"
   local job_name="${PREFIX}-${task}"
-  echo "=== $job_name  (k=$K n=$N) ===" | tee -a "$LOG"
-  PYTHONPATH="$ROOT" harbor run \
-    -p "$TASK_ROOT/$task" \
-    -a "$AGENT" \
-    -m "$MODEL" \
-    --ak "version=${PI_VERSION}" \
-    --ak model_api=openai-completions \
-    --ak "thinking=${SYSML_THINKING}" \
-    --ak "max_turns=${SYSML_MAX_TURNS}" \
-    -k "$K" -n "$N" \
-    --env parallel_tvcache.evaluation.docker_disconnect:DockerDisconnectEnvironment \
-    --extra-docker-compose "$SYSML_COMPOSE_OVERLAY" \
-    --jobs-dir "$ROOT/jobs" \
-    --job-name "$job_name" \
-    --yes | tee -a "$LOG"
+  echo "=== $job_name  (k=$K n=$N harbor=$HARBOR_AGENT agent=$AGENT) ===" | tee -a "$LOG"
+  local -a harbor_cmd=(
+    harbor run
+    -p "$TASK_ROOT/$task"
+    -m "$MODEL"
+    -k "$K" -n "$N"
+    --env parallel_tvcache.evaluation.docker_disconnect:DockerDisconnectEnvironment
+    --extra-docker-compose "$SYSML_COMPOSE_OVERLAY"
+    --jobs-dir "$ROOT/jobs"
+    --job-name "$job_name"
+    --yes
+  )
+  if [[ "$HARBOR_AGENT" == "mini-swe-agent" ]]; then
+    # LoopbackMiniSwe starts model_transport on :18081 (stock mini-swe does not)
+    # and keeps chat-completions for Qwen (stock openai/*+effort → /v1/responses).
+    harbor_cmd+=(-a parallel_tvcache.evaluation.loopback_mini_swe:LoopbackMiniSwe)
+    harbor_cmd+=(--ak "max_tokens=${SYSML_MAX_TOKENS}")
+    if [[ -n "${MSA_VERSION:-}" ]]; then
+      harbor_cmd+=(--ak "version=${MSA_VERSION}")
+    fi
+    if [[ -n "$MSA_REASONING_EFFORT" ]]; then
+      harbor_cmd+=(--ak "reasoning_effort=${MSA_REASONING_EFFORT}")
+    fi
+  else
+    # $AGENT is LoopbackPi by default, MultitoolLoopbackPi when SYSML_PARALLEL_STRESS=1
+    harbor_cmd+=(
+      -a "$AGENT"
+      --ak "version=${PI_VERSION}"
+      --ak model_api=openai-completions
+      --ak "thinking=${SYSML_THINKING}"
+      --ak "max_turns=${SYSML_MAX_TURNS}"
+    )
+  fi
+  PYTHONPATH="$ROOT" "${harbor_cmd[@]}" | tee -a "$LOG"
   .venv/bin/python scripts/check_trial.py "jobs/$job_name" || true
 }
 
