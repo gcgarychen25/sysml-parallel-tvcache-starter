@@ -1,0 +1,10 @@
+# T2 valid subset — 8/8 tasks graded reward 1.0 × pass@5 (exclude timeout cells).
+# Full attempted list: configs/experiment-tasks-tmax-easy10.txt
+task_004783_a0ba89ed
+task_004205_b4f9a6a8
+task_004019_52b6d9d0
+task_002284_acbf44a1
+task_004822_edd3263f
+task_004636_913540cc
+task_004810_73ab18e6
+task_009308_8d615af9

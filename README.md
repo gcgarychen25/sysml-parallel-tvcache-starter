@@ -135,13 +135,13 @@ python -m pytest -q                           # sanity-check unit tests
 docker build -f configs/model-gateway.Dockerfile -t sysml-model-gateway:refactor-check .
 ```
 
-## Project status — 2026-11-03
+## Project status — 2026-11-04
 
 | Experiment | Mode flag | What we measure | Status |
 | --- | --- | --- | --- |
-| **A** | `none` | Reward; parallel-turn fraction; cross-rollout TCG prefix | **Done** on 9B — `docs/workload_characterization_report.md` (A0–A2). Reward 0 (tasks hard for 9B); parallel≈0; TCG overlap non-zero |
-| **B** | `sequential` | Sequential TVCache hit rate / tool-wait (shared TCG across concurrent pass@k) | **Start in parallel** — stub until `tvclient` on tool path |
-| **C** | `parallel` | Parallel-aware TVCache (within-turn N>1) | Wait (parallel-turn still ≈0) |
+| **A** | `none` | Reward; parallel-turn fraction; cross-rollout TCG prefix | DeepSWE 9B/27B: reward 0 (task hard). **Pipeline proven** on TMax short tasks: **T1 5/5**, **T2 40/40** reward 1.0 on 8 valid tasks — see `docs/workload_characterization_report.md` |
+| **B** | `sequential` | Sequential TVCache hit rate / tool-wait (shared TCG across concurrent pass@k) | **Start anytime** — stub until `tvclient` on tool path |
+| **C** | `parallel` | Parallel-aware TVCache (within-turn N>1) | Natural parallel >0 on 27B (DeepSWE ~5%, TMax ~15–24%); forced stress separate (`docs/parallel_prompt_stress_report.md`) |
 
 One runner; pick the mode you want (A-only, B-only, C-only, or `all`). It does **not** re-run other modes unless you pass `all`.
 
@@ -183,9 +183,9 @@ bash scripts/run_experiment.sh none   # prefer Terminal.app / screen
 
 | Owner track | Status |
 | --- | --- |
-| Exp A (`none`) | Cells **A0–A2** in the report — reward 0 on 9B; Gary retries with a **stronger ~27B** tonight |
-| Exp B sequential TVCache | **Start anytime** — wire `tvclient` on Pi tool-execute; use `none` A0/A1 as no-cache baseline |
-| Exp C | Wait until parallel-turn > 0 on **natural** Exp A; stress surface already >0 — see `docs/parallel_prompt_stress_report.md` |
+| Exp A (`none`) | Report cells through **T2** — DeepSWE hardness confirmed; TMax short×27B×Pi unlocks reward 1.0 (pipeline OK) |
+| Exp B sequential TVCache | **Start anytime** — wire `tvclient` on Pi tool-execute; use `none` A0/A1 / T\* as baselines |
+| Exp C | Natural parallel already >0 on 27B; forced Multitool stress optional — see stress report |
 
 ### Experiment A — historical 3-task cell (2026-10-30)
 

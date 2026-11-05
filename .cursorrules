@@ -14,7 +14,7 @@ Teammate-facing docs: root `README.md` only. Exp A evidence: single `docs/worklo
 - Resume a live NERSC serve with `SYSML_ATTACH_JOB` + `SYSML_ATTACH_NODE` (after `bridge_up` is defined). Do not `scancel` a READY alloc just because the Mac runner died.
 - Default wave: `SYSML_PASS_K=5`, `SYSML_HARBOR_N=5`, `SYSML_MAX_NUM_SEQS=5`, `SYSML_GPU_MEMORY_UTILIZATION=0.80`, tasks from `configs/experiment-tasks.txt` (10 setup variants). Recycle alloc every `SYSML_TASKS_PER_ALLOC` (default 2). GPU monitor: `scripts/monitor_nersc_gpu.sh` / `gpu-monitor.log`.
 - Do not confuse knobs: `SYSML_MAX_MODEL_LEN` / `SYSML_CONTEXT_WINDOW` = total prompt+history capacity; `SYSML_MAX_TOKENS` = **per-completion** generation cap; `SYSML_MAX_TURNS` = assistant **turn** ceiling (not tokens). Reward 0 + turn exhaustion ≠ “ran out of 256K context.”
-- Exp A **A0–A2** (9B) reward **0**; **A3** clack×27B Pi done (f2p≈48/82, reward 0). **Isolation (mode none, happy-dom):** **B1** Mini-SWE×27B DONE — 5/5 reward 0, all `AgentTimeoutError` @10800s, f2p **0/14** (p2p 165/165), no commit/submit, never opened `AsyncTeardown.test.ts` (not harness/API break). **B2** Flash-Next **skipped** (A100-40GB). **A3b** Pi×27B baseline still TBD. Envs `qwen3.8-27b-happydom-pi`, `…-miniswe`, `qwen3.8-flash-happydom-pi`; tasks `configs/experiment-tasks-easy1.txt`. Not Exp B TVCache.
+- Exp A DeepSWE reward 0 = task hardness. **T1/T2** TMax short×27B×Pi proves pipeline: T1 5/5; T2 **40/40** on 8 valid tasks (exclude `001033` env-timeout, `009942` agent-timeout). Natural Pi only. Tasks `variants/tmax-easy/`. Not Exp B TVCache.
 
 ## Evidence honesty
 
@@ -30,6 +30,7 @@ Teammate-facing docs: root `README.md` only. Exp A evidence: single `docs/worklo
 - TVCache key = trajectory prefix in the TCG. Paper win = cross-rollout reuse (Exp B). Within-turn N>1 is Exp C.
 - Forced-parallel stress (`MultitoolPi` / `SYSML_PARALLEL_STRESS` / `--parallel-test`, PR #1) is **not** Exp A natural rate. Cite `docs/parallel_prompt_stress_report.md` separately. Soft prompt (“parallel when appropriate”) for ≥27B; hard “AS MANY” only for emission stress. Exp C also needs **cache hits on parallel-tool turns**, not just parallel-turn %.
 - When the goal is **solve + parallel stress**, keep proven capability knobs (27B: **4 GPU / TP=4 / 256K / 250 turns / k=5**). Do not cut context/turns just to fit 2 GPUs — allocate more GPUs instead.
+- DeepSWE (even “easy” happy-dom) stays reward 0 on Qwen3.8-27B pass@5 — too hard for capability demos. Prefer **TMax short+bash-only** tasks for solve-rate smoke (`variants/tmax-easy/`, `configs/experiment-tasks-tmax-easy1.txt`). Harbor registry `tmax/…` needs `harbor auth login`; local extract from HF `TMaxxx/TMax-15K-Harbor` `tasks.zip` works with `-p`.
 - Parallel-turn metric = **model-emitted** >1 tool_call in one assistant message (not wall-clock overlap). Mini-SWE **does** accept multi-`bash` in one turn (B1: 84/378, always n=2); default agent executes them **sequentially** (`for action in actions`). Stock Harbor mini prompt does not push MULTIPLE; Qwen3.8-27B still emitted pairs. `analyze_characterization_wave.py` only reads Pi `*.jsonl` — Mini-SWE needs ATIF / `mini-swe-agent.trajectory.json`.
 
 ## Model / runner sync
