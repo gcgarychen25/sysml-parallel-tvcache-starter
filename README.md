@@ -1,10 +1,12 @@
 # CS5470 SYSML — Team 39: Parallel Tool-Value Cache
 
-Evaluate DeepSWE agents with Harbor + Pi against vLLM, then add TVCache (sequential → parallel-aware) on the tool-execute path.
+Run coding agents with **Harbor + Pi** against NERSC vLLM, characterize tool-calling workloads (Exp A), then add TVCache (sequential → parallel-aware) on the tool-execute path.
+
+**Do not conflate:** **DeepSWE** / **TMax** = task suites Harbor loads · **Pi** / **Mini-SWE** = agent harnesses · **Harbor** = orchestrator. Exp A default is **Harbor + Pi**; Mini-SWE is isolation-only (cell B1).
 
 ## System diagram
 
-**Agent** = **Pi** (tool-calling harness inside the agent sandbox; can emit several tool calls in one turn) **+** the LLM on NERSC (`Qwen/Qwen3.5-9B` over **OpenAI Chat Completions**).
+**Agent** = **Pi** (`LoopbackPi` harness inside the agent sandbox; can emit several tool calls in one turn) **+** the LLM on NERSC (Exp A cells use `Qwen/Qwen3.5-9B` or `Qwen/Qwen3.8-27B` over **OpenAI Chat Completions**).
 
 **Harbor** (Mac host process) builds/starts the Docker sandboxes below and feeds each trial `instruction.md`. The SSH tunnel is also a Mac host process. **TVCache** (`tvcache-rust` + `tvclient` on the Mac) caches tool results by trajectory prefix; Experiment A leaves it off (`none`).
 
@@ -68,7 +70,7 @@ run_experiment.sh none
 
 **`bridge_up` in one line:** yes — it is our Mac-side Chat Completions gateway (plus the SSH tunnel). Agents never talk to NERSC directly; they hit the Unix socket → gateway → tunnel → vLLM `/v1/chat/completions`.
 
-Key files in order: `run_experiment.sh` → `run_harbor_wave.sh` → `nersc_serve_model.sbatch` → `loopback_pi.py` → `inference/model_transport.py` → `variants/deep-swe-setup/tasks/<id>/`.
+Key files in order: `run_experiment.sh` → `run_harbor_wave.sh` → `nersc_serve_model.sbatch` → `loopback_pi.py` → `inference/model_transport.py` → task folder under `variants/…/tasks/<id>/`.
 
 ## Layout
 
@@ -78,11 +80,13 @@ artifacts/
   expA-traces-A0-A2.zip   curated Pi sessions + summaries (~5 MB; not full jobs/)
 docs/
   project_assignment.pdf
-  workload_characterization_report.md      Exp A cells A0–A2 (one table; extend by row)
-  parallel_prompt_stress_report.md         MLX forced-parallel prompt stress (not natural Exp A)
+  workload_characterization_report.md      Exp A cells A0–T2 (one table; extend by row)
+  parallel_prompt_stress_report.md         forced-parallel Multitool stress (not natural Exp A)
 parallel_tvcache/         Harbor/Pi adapters, model transport, measurement, cache prototype
-variants/                 Harbor task dirs (instruction + thin image); see below
-configs/                  example.env · experiment-tasks.txt · experiment-tasks-parallel-stress.txt · models/
+variants/
+  deep-swe-setup/         DeepSWE setup-in-instruction tasks (A0–A3b, B1)
+  tmax-easy/              TMax short+bash-only tasks (T1–T2 pipeline proof)
+configs/                  example.env · experiment-tasks*.txt · models/
 scripts/
   setup_repositories.sh       clone vendor deps
   prepare_task.py             rebuild a task variant under variants/
@@ -104,20 +108,22 @@ jobs/, results/           local run evidence (gitignored)
 
 ### What a Harbor task is
 
-A DeepSWE task is a folder Harbor loads, mainly:
+A **task** is a folder Harbor loads (DeepSWE *or* TMax — same layout), mainly:
 
 | Path | Role |
 | --- | --- |
-| `instruction.md` | User message Pi shows the model |
+| `instruction.md` | User message the harness shows the model |
 | `environment/Dockerfile` | Builds the agent sandbox image |
 | `tests/` | Separate verifier image + grader (agent never sees this while solving) |
-| `solution/` | Reference fix (not shown to the agent) |
+| `solution/` | Reference fix when present (not shown to the agent) |
 
-At run time the agent only gets **`instruction.md` + a live container**. Harbor builds that container from the Dockerfile; it does not paste the Dockerfile, tests, or solution into the chat.
+At run time the agent only gets **`instruction.md` + a live container**. Harbor builds that container from the Dockerfile; it does not paste the Dockerfile, tests, or solution into the chat. Default harness is **Pi** (`LoopbackPi`); set `SYSML_HARBOR_AGENT=mini-swe-agent` only for Mini-SWE isolation.
 
 **Stock DeepSWE:** the Dockerfile already clones and installs, so `/app` is ready when the agent starts and setup never shows up as tool calls.
 
-**Our variants** (`variants/deep-swe-setup/tasks/<id>/`): copy the official task, keep `tests/` the same, then (1) clear `/app` in the agent image and (2) prepend clone/install steps to `instruction.md`. Build more with `scripts/prepare_task.py <task_id> --setup-as-agent-actions`.
+**Our DeepSWE variants** (`variants/deep-swe-setup/tasks/<id>/`): copy the official task, keep `tests/` the same, then (1) clear `/app` in the agent image and (2) prepend clone/install steps to `instruction.md`. Build more with `scripts/prepare_task.py <task_id> --setup-as-agent-actions`.
+
+**TMax easy** (`variants/tmax-easy/tasks/<id>/`): short+bash-only extracts used for **T1/T2** to prove the Harbor+Pi+NERSC path when DeepSWE stays reward 0 (task hardness). See `variants/tmax-easy/README.md`.
 
 ## Install
 
@@ -139,9 +145,9 @@ docker build -f configs/model-gateway.Dockerfile -t sysml-model-gateway:refactor
 
 | Experiment | Mode flag | What we measure | Status |
 | --- | --- | --- | --- |
-| **A** | `none` | Reward; parallel-turn fraction; cross-rollout TCG prefix | DeepSWE 9B/27B: reward 0 (task hard). **Pipeline proven** on TMax short tasks: **T1 5/5**, **T2 40/40** reward 1.0 on 8 valid tasks — see `docs/workload_characterization_report.md` |
-| **B** | `sequential` | Sequential TVCache hit rate / tool-wait (shared TCG across concurrent pass@k) | **Start anytime** — stub until `tvclient` on tool path |
-| **C** | `parallel` | Parallel-aware TVCache (within-turn N>1) | Natural parallel >0 on 27B (DeepSWE ~5%, TMax ~15–24%); forced stress separate (`docs/parallel_prompt_stress_report.md`) |
+| **A** | `none` | Reward; parallel-turn fraction; cross-rollout TCG prefix | **Harbor + Pi** throughout (except B1 Mini-SWE). DeepSWE tasks ×9B/27B: reward 0 (task hard). **Pipeline proven** on **TMax** short tasks ×27B×Pi: **T1 5/5**, **T2 40/40** reward 1.0 on 8 valid tasks — `docs/workload_characterization_report.md` |
+| **B** | `sequential` | Sequential TVCache hit rate / tool-wait (shared TCG across concurrent pass@k) | **Start anytime** — stub until `tvclient` on **Pi** tool path |
+| **C** | `parallel` | Parallel-aware TVCache (within-turn N>1) | Natural parallel >0 on 27B×Pi (DeepSWE-tasks ~5%, TMax ~15–24%); forced Multitool stress separate (`docs/parallel_prompt_stress_report.md`) |
 
 One runner; pick the mode you want (A-only, B-only, C-only, or `all`). It does **not** re-run other modes unless you pass `all`.
 
@@ -151,6 +157,64 @@ bash scripts/run_experiment.sh sequential   # Experiment B only (stub today)
 bash scripts/run_experiment.sh parallel     # Experiment C only (stub today)
 bash scripts/run_experiment.sh all          # A, then B, then C
 ```
+
+### Handout tables (filled from T2 where possible)
+
+#### Matched run contract (Table 1 TMax + Table 2 all rows)
+
+Use **exactly** this stack for no-cache baseline and for Exp B/C cache rows — only the cache mode may change:
+
+| Knob | Required value |
+| --- | --- |
+| Orchestrator | **Harbor** (Mac Docker) |
+| Agent / harness | **Pi** (`LoopbackPi`, `SYSML_HARBOR_AGENT=pi`) — **not** Mini-SWE, **not** Multitool / `--parallel-test` |
+| Model | **`Qwen/Qwen3.8-27B`** |
+| Tasks | **These 8 ids** only (`configs/experiment-tasks-tmax-easy8.txt` → `variants/tmax-easy/tasks/<id>/`) |
+| Pass@k / Harbor concurrency / vLLM seqs | **`pass@5` · `-n 5` · `--max-num-seqs 5`** (`SYSML_PASS_K=SYSML_HARBOR_N=SYSML_MAX_NUM_SEQS=5`) |
+| Context / turns / completion / thinking | **256K** (`SYSML_MAX_MODEL_LEN=SYSML_CONTEXT_WINDOW=262144`) · **`SYSML_MAX_TURNS=100`** · **`SYSML_MAX_TOKENS=32768`** · **`SYSML_THINKING=xhigh`** |
+| GPUs | **TP=4** / 4×GPU (`SYSML_GPUS=SYSML_TENSOR_PARALLEL_SIZE=4`) |
+| No-cache baseline cell | T2 prefix `tmax-qwen38-27b-easy10-t100-xh` (mode `none`); env template `configs/models/qwen3.8-27b-tmax-easy10-pi.env.example` with `SYSML_TASK_LIST=configs/experiment-tasks-tmax-easy8.txt` |
+
+**The 8 task ids:**
+
+```text
+task_004783_a0ba89ed
+task_004205_b4f9a6a8
+task_004019_52b6d9d0
+task_002284_acbf44a1
+task_004822_edd3263f
+task_004636_913540cc
+task_004810_73ab18e6
+task_009308_8d615af9
+```
+
+Do **not** include `task_001033_d7fd9ed7` (env-start timeout) or `task_009942_0ca9b627` (agent timeout) from the attempted easy10 list. Cell detail: `docs/workload_characterization_report.md`. DeepSWE Table 1 rows use Exp A **A3** (clack ×27B×Pi), not this TMax set.
+
+#### Table 1 — Workload characterization
+
+| Benchmark | Tool type | Turns with >1 tool call (%) | Calls-per-turn CDF (P(≤k)) |
+| --- | --- | ---: | --- |
+| **TMax** (T2, 8 tasks above, 40 sessions / 267 turns) | All tools | **15.0%** (40/267) | ≤0: 0.15 · ≤1: 0.85 · ≤2: 0.97 · ≤3: 0.99 · ≤4: 1.00 |
+| TMax | `bash` | **2.6%** (7/267) | ≤0: 0.28 · ≤1: 0.97 · ≤2: 1.00 |
+| TMax | `read` | **3.4%** (9/267) | ≤0: 0.88 · ≤1: 0.97 · ≤2: 0.98 · ≤3: 0.99 · ≤4: 1.00 |
+| TMax | `edit` | **0%** (0/267) | ≤0: 0.92 · ≤1: 1.00 |
+| TMax | `write` | **0%** (0/267) | ≤0: 0.97 · ≤1: 1.00 |
+| DeepSWE (A3 clack ×27B×Pi) | All tools | **4.8%** (19/397) | ≤0: 0.01 · ≤1: 0.95 · ≤2: 1.00 |
+| DeepSWE (A3) | `bash` / `read` / `edit` / `write` | 2.3% / 1.0% / 0% / 0% | see `results/characterization/char-qwen38-27b-clack-t250-xh/parallel_summary.json` |
+
+CDF = fraction of assistant turns with **at most** *k* model-emitted tool calls (includes zero-call turns). This is **emission** parallelism, not measured wall-clock overlap.
+
+#### Table 2 — Cache comparison
+
+| Configuration | Per-call hit rate (%) | Per-turn hit rate (%) | Tool-wait time saved (%) | pass@1 | pass@5 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| **No cache reuse** (Exp A `none`, matched contract above) | N/A | N/A | **0** (reference) | **8/8 (100%)** | **8/8 (100%)** |
+| Existing single-call TVCache (Exp B) | TBD | TBD | TBD | TBD | TBD |
+| Parallel-aware TVCache (Exp C) | TBD | TBD | TBD | TBD | TBD |
+
+**pass@5:** task solved if any of the 5 concurrent trials has verifier reward 1.0 → **8/8** (all 40 graded trials reward 1.0).  
+**pass@1:** first trial per task among the k=5 batch (earliest `result.json` mtime among the five Harbor trial dirs) → also **8/8** (every trial succeeded).  
+Exp B/C rows stay TBD until `tvclient` is on the Pi tool-execute path; they **must** reuse the matched contract (same 8 ids + Harbor+Pi+27B+pass@5/n=5+256K/100/xhigh). Only cache wiring / `SYSML_CACHE_MODE` changes.
 
 ### Experiment A — primary completed cell (2026-11-01)
 
@@ -166,7 +230,7 @@ bash scripts/run_experiment.sh all          # A, then B, then C
 | Write-up | **`docs/workload_characterization_report.md`** (all cells in one table) |
 | Artifacts | `results/characterization/char-setup-10t-k5/` · `jobs/char-setup-10t-k5-*/` |
 
-Later cells (A1 256K/TP4, A2 thinking/TP2 pilots): same report table — **reward 0**, parallel ~0, **prefer TP=2** for 9B; next capability ≈27B. Env examples under `configs/models/`.
+Later cells (A1–A3 DeepSWE × Pi, B1 Mini-SWE, **T1–T2 TMax × Pi**): same report table. DeepSWE stays reward 0; TMax ×27B×Pi unlocks reward 1.0. Prefer **TP=2** for 9B / **TP=4** for 27B. Env examples under `configs/models/`.
 
 ```bash
 # TP2 / thinking pilot (or pick another configs/models/*.env.example). Use YOUR pscratch root — see Reproduce.
@@ -183,9 +247,9 @@ bash scripts/run_experiment.sh none   # prefer Terminal.app / screen
 
 | Owner track | Status |
 | --- | --- |
-| Exp A (`none`) | Report cells through **T2** — DeepSWE hardness confirmed; TMax short×27B×Pi unlocks reward 1.0 (pipeline OK) |
+| Exp A (`none`) | Cells through **T2** — DeepSWE **tasks** stay reward 0; **same Pi harness** + TMax tasks → reward 1.0 (pipeline OK). Mini-SWE = B1 only |
 | Exp B sequential TVCache | **Start anytime** — wire `tvclient` on Pi tool-execute; use `none` A0/A1 / T\* as baselines |
-| Exp C | Natural parallel already >0 on 27B; forced Multitool stress optional — see stress report |
+| Exp C | Natural parallel already >0 on 27B×Pi; forced Multitool stress optional — see stress report |
 
 ### Experiment A — historical 3-task cell (2026-10-30)
 

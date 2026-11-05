@@ -14,7 +14,9 @@ Teammate-facing docs: root `README.md` only. Exp A evidence: single `docs/worklo
 - Resume a live NERSC serve with `SYSML_ATTACH_JOB` + `SYSML_ATTACH_NODE` (after `bridge_up` is defined). Do not `scancel` a READY alloc just because the Mac runner died.
 - Default wave: `SYSML_PASS_K=5`, `SYSML_HARBOR_N=5`, `SYSML_MAX_NUM_SEQS=5`, `SYSML_GPU_MEMORY_UTILIZATION=0.80`, tasks from `configs/experiment-tasks.txt` (10 setup variants). Recycle alloc every `SYSML_TASKS_PER_ALLOC` (default 2). GPU monitor: `scripts/monitor_nersc_gpu.sh` / `gpu-monitor.log`.
 - Do not confuse knobs: `SYSML_MAX_MODEL_LEN` / `SYSML_CONTEXT_WINDOW` = total prompt+history capacity; `SYSML_MAX_TOKENS` = **per-completion** generation cap; `SYSML_MAX_TURNS` = assistant **turn** ceiling (not tokens). Reward 0 + turn exhaustion ≠ “ran out of 256K context.”
-- Exp A DeepSWE reward 0 = task hardness. **T1/T2** TMax short×27B×Pi proves pipeline: T1 5/5; T2 **40/40** on 8 valid tasks (exclude `001033` env-timeout, `009942` agent-timeout). Natural Pi only. Tasks `variants/tmax-easy/`. Not Exp B TVCache.
+- DeepSWE/TMax = **task suites**; Pi/Mini-SWE = **harnesses**; Harbor = orchestrator. Exp A DeepSWE reward 0 = task hardness. **T1/T2** = same **Harbor+Pi**, TMax tasks: T1 5/5; T2 **40/40** on 8 valid (exclude `001033` env-timeout, `009942` agent-timeout). Natural Pi only. Not Exp B TVCache.
+- Handout Tables 1–2 in root `README.md` use explicit matched contract: Harbor+Pi · Qwen3.8-27B · 8 ids in `experiment-tasks-tmax-easy8.txt` · pass@5/n=5 · 256K/100 turns/xhigh/TP4. DeepSWE Table 1 row = A3; TVCache rows TBD until Exp B/C.
+- Wave `manifest.json` `purpose` follows `SYSML_TASK_ROOT` (tmax vs deep-swe). Analyzer `--benchmark` defaults to the string `DeepSWE` — tag only; pass `--benchmark TMax` for T* summaries.
 
 ## Evidence honesty
 

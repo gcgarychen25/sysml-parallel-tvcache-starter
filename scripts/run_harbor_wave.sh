@@ -182,8 +182,17 @@ from pathlib import Path
 (path, cache, model, turns, thinking, k, n, seqs, task_root, prefix,
  max_len, ctx, gpus, tp, gpu_mem, qos, task_parallel) = sys.argv[1:18]
 tasks = sys.argv[18:]
+# purpose follows task_root — do not hard-label every wave as DeepSWE (TMax / stress share this runner).
+if "tmax" in task_root:
+    purpose = "tmax-tasks"
+elif "parallel-stress" in task_root or "deep-swe-parallel" in task_root:
+    purpose = "parallel-prompt-stress"
+elif "deep-swe" in task_root:
+    purpose = "deep-swe-setup-variants"
+else:
+    purpose = "harbor-characterization-wave"
 Path(path).write_text(json.dumps({
-    "purpose": "deep-swe-setup-variants-10task",
+    "purpose": purpose,
     "cache_mode": cache,
     "model": model,
     "max_turns": int(turns),

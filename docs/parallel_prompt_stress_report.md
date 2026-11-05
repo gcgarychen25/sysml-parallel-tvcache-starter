@@ -3,7 +3,8 @@
 **STRESS only** (instruction preamble + MultitoolPi). **Do not** mix into Exp A natural-rate tables (`docs/workload_characterization_report.md`).
 
 **Mode:** no TVCache · **Model:** `mlx-community/Qwen3-4B-Instruct-2507-4bit` (local MLX OpenAI server) · **Agent:** `MultitoolPi` (deleted after cleanup; traces kept)  
-**Tasks:** stock DeepSWE Harbor corpus (`configs/experiment-tasks-deepswe-all.txt` = **113** tasks).  
+**Harness:** Multitool / forced-parallel Pi (`MultitoolLoopbackPi` / `--parallel-test`) — **not** the stock Exp A Pi prompt, and **not** Mini-SWE.  
+**Tasks:** stock DeepSWE Harbor corpus (`configs/experiment-tasks-deepswe-all.txt` = **113** tasks) unless a cell says happy-dom-only.  
 **Forced-parallel intervention:** prepend “emit as many independent tool calls as possible in the same assistant turn” (target 5–10+ on explore turns).  
 **Status:** full-corpus forced-parallel wave **stopped mid-run** (~41/113 attempted) after OOM / MLX instability cleanup.
 
