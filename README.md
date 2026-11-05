@@ -93,7 +93,11 @@ scripts/
   prepare_parallel_stress.py  prepend max-parallel instruction (stress only; not Exp A)
   run_mlx_parallel_stress.sh  local MLX forced-parallel stress wave
   run_experiment.sh           mode = none|sequential|parallel|all; add --parallel-test for stress
-  run_harbor_wave.sh          NERSC + Harbor (Exp A default; --parallel-test sets MultitoolLoopbackPi)
+  run_harbor_wave.sh          NERSC + Harbor (Exp A default; sequential → TvcacheLoopbackPi)
+  tvcache_server.sh           start/stop paper tvcache-rust (:7878)
+  tvcache_tool_gateway.sh     start/stop host tool gateway (Unix sock)
+  tvcache_client_smoke.py     insert/find smoke against tvcache-rust
+  analyze_tvcache_metrics.py  summarize Exp B hit/miss JSONL
   nersc_serve_model.sbatch    vLLM on NERSC (reads SYSML_MAX_NUM_SEQS, etc.)
   monitor_nersc_gpu.sh        poll nvidia-smi on the live alloc (GPU memory)
   monitor_vllm_metrics.sh     poll vLLM /metrics (KV% / Running / Waiting) via tunnel
@@ -132,6 +136,7 @@ Shared by every experiment:
 ```bash
 uv venv && source .venv/bin/activate          # create + enter Python venv
 uv pip install -e '.[dev]'                    # install this package + test deps
+uv pip install -e vendor/tvclient             # paper TVCache Python client (Exp B)
 uv tool install harbor                        # install Harbor CLI
 bash scripts/setup_repositories.sh            # clone vendor/deep-swe, tvcache-rust, tvclient
 cp configs/example.env .env                   # local MODEL knobs (gitignored)
@@ -139,23 +144,41 @@ python -m pytest -q                           # sanity-check unit tests
 
 # Open the Docker Desktop app, then build the Mac-side model gateway once:
 docker build -f configs/model-gateway.Dockerfile -t sysml-model-gateway:refactor-check .
+
+# Exp B smoke (no Harbor): build+start paper TVCache server, insert/find round-trip
+bash scripts/tvcache_server.sh start
+PYTHONPATH=vendor/tvclient:. python scripts/tvcache_client_smoke.py
+bash scripts/tvcache_tool_gateway.sh start    # Unix sock → tvclient
+bash scripts/tvcache_tool_gateway.sh stop
+bash scripts/tvcache_server.sh stop
 ```
 
-## Project status — 2026-11-04
+## Project status — 2026-11-05
 
 | Experiment | Mode flag | What we measure | Status |
 | --- | --- | --- | --- |
 | **A** | `none` | Reward; parallel-turn fraction; cross-rollout TCG prefix | **Harbor + Pi** throughout (except B1 Mini-SWE). DeepSWE tasks ×9B/27B: reward 0 (task hard). **Pipeline proven** on **TMax** short tasks ×27B×Pi: **T1 5/5**, **T2 40/40** reward 1.0 on 8 valid tasks — `docs/workload_characterization_report.md` |
-| **B** | `sequential` | Sequential TVCache hit rate / tool-wait (shared TCG across concurrent pass@k) | **Start anytime** — stub until `tvclient` on **Pi** tool path |
+| **B** | `sequential` | Sequential TVCache hit rate / tool-wait (shared TCG across concurrent pass@k) | **Wired** — `tvcache-rust` + host tool gateway + `TvcacheLoopbackPi`; run matched TMax-8 via `configs/models/qwen3.8-27b-tmax-easy8-tvcache-seq.env.example`. Table 2 Exp B row still TBD until full wave metrics. |
 | **C** | `parallel` | Parallel-aware TVCache (within-turn N>1) | Natural parallel >0 on 27B×Pi (DeepSWE-tasks ~5%, TMax ~15–24%); forced Multitool stress separate (`docs/parallel_prompt_stress_report.md`) |
 
 One runner; pick the mode you want (A-only, B-only, C-only, or `all`). It does **not** re-run other modes unless you pass `all`.
 
 ```bash
 bash scripts/run_experiment.sh none         # Experiment A only
-bash scripts/run_experiment.sh sequential   # Experiment B only (stub today)
+bash scripts/run_experiment.sh sequential   # Experiment B (TVCache sequential)
 bash scripts/run_experiment.sh parallel     # Experiment C only (stub today)
 bash scripts/run_experiment.sh all          # A, then B, then C
+```
+
+**Exp B run (matched contract):**
+
+```bash
+set -a && source configs/models/qwen3.8-27b-tmax-easy8-tvcache-seq.env.example && set +a
+export SYSML_NERSC_USER=<user>
+export SYSML_REMOTE_ROOT=/pscratch/sd/<letter>/<user>/sysml_parallel_tvcache
+bash scripts/run_experiment.sh sequential
+# metrics: results/characterization/$SYSML_JOB_PREFIX/tvcache-metrics.jsonl
+python scripts/analyze_tvcache_metrics.py results/characterization/$SYSML_JOB_PREFIX/tvcache-metrics.jsonl
 ```
 
 ### Handout tables (filled from T2 where possible)
@@ -167,7 +190,7 @@ Use **exactly** this stack for no-cache baseline and for Exp B/C cache rows — 
 | Knob | Required value |
 | --- | --- |
 | Orchestrator | **Harbor** (Mac Docker) |
-| Agent / harness | **Pi** (`LoopbackPi`, `SYSML_HARBOR_AGENT=pi`) — **not** Mini-SWE, **not** Multitool / `--parallel-test` |
+| Agent / harness | **Pi** — Exp A no-cache: `LoopbackPi`; Exp B: `TvcacheLoopbackPi` (same Pi LLM loop; tools via TVCache gateway). **Not** Mini-SWE / Multitool |
 | Model | **`Qwen/Qwen3.8-27B`** |
 | Tasks | **These 8 ids** only (`configs/experiment-tasks-tmax-easy8.txt` → `variants/tmax-easy/tasks/<id>/`) |
 | Pass@k / Harbor concurrency / vLLM seqs | **`pass@5` · `-n 5` · `--max-num-seqs 5`** (`SYSML_PASS_K=SYSML_HARBOR_N=SYSML_MAX_NUM_SEQS=5`) |
@@ -209,12 +232,12 @@ CDF = fraction of assistant turns with **at most** *k* model-emitted tool calls 
 | Configuration | Per-call hit rate (%) | Per-turn hit rate (%) | Tool-wait time saved (%) | pass@1 | pass@5 |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | **No cache reuse** (Exp A `none`, matched contract above) | N/A | N/A | **0** (reference) | **8/8 (100%)** | **8/8 (100%)** |
-| Existing single-call TVCache (Exp B) | TBD | TBD | TBD | TBD | TBD |
+| Existing single-call TVCache (Exp B) | TBD (run wave) | TBD | TBD | TBD | TBD |
 | Parallel-aware TVCache (Exp C) | TBD | TBD | TBD | TBD | TBD |
 
 **pass@5:** task solved if any of the 5 concurrent trials has verifier reward 1.0 → **8/8** (all 40 graded trials reward 1.0).  
 **pass@1:** first trial per task among the k=5 batch (earliest `result.json` mtime among the five Harbor trial dirs) → also **8/8** (every trial succeeded).  
-Exp B/C rows stay TBD until `tvclient` is on the Pi tool-execute path; they **must** reuse the matched contract (same 8 ids + Harbor+Pi+27B+pass@5/n=5+256K/100/xhigh). Only cache wiring / `SYSML_CACHE_MODE` changes.
+Exp B wiring is in-tree (`bash scripts/run_experiment.sh sequential`); fill hit-rate / tool-wait from `tvcache-metrics.jsonl` after the matched TMax-8 wave. Exp C still stub.
 
 ### Experiment A — primary completed cell (2026-11-01)
 
@@ -248,7 +271,7 @@ bash scripts/run_experiment.sh none   # prefer Terminal.app / screen
 | Owner track | Status |
 | --- | --- |
 | Exp A (`none`) | Cells through **T2** — DeepSWE **tasks** stay reward 0; **same Pi harness** + TMax tasks → reward 1.0 (pipeline OK). Mini-SWE = B1 only |
-| Exp B sequential TVCache | **Start anytime** — wire `tvclient` on Pi tool-execute; use `none` A0/A1 / T\* as baselines |
+| Exp B sequential TVCache | **Wired** — run `qwen3.8-27b-tmax-easy8-tvcache-seq.env.example`; coordinate with Saifei so we don’t duplicate the matched TMax-8 wave |
 | Exp C | Natural parallel already >0 on 27B×Pi; forced Multitool stress optional — see stress report |
 
 ### Experiment A — historical 3-task cell (2026-10-30)

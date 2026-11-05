@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Shared Harbor + NERSC wave (setup variants × pass@k with concurrency n).
-# Called by run_experiment.sh. Reads SYSML_CACHE_MODE (only "none" wired today).
+# Called by run_experiment.sh. SYSML_CACHE_MODE=none|sequential (parallel still stub).
 #
 # Defaults = proven A0 cell (1 GPU, 8K, max_turns=8, k=n=seqs=5).
 # A1 (4 GPU TP, 256K, max_turns=100): source configs/models/qwen3.5-9b-a1-tp4-256k.env.example
@@ -100,8 +100,18 @@ if [[ "${SYSML_PARALLEL_STRESS:-0}" == "1" ]]; then
   TASK_LIST="${SYSML_TASK_LIST:-$ROOT/configs/experiment-tasks-parallel-stress.txt}"
   PREFIX="${SYSML_JOB_PREFIX:-stress-nersc-parallel}"
 fi
+if [[ "$CACHE_MODE" == "sequential" ]]; then
+  AGENT="${SYSML_AGENT:-parallel_tvcache.evaluation.tvcache_pi:TvcacheLoopbackPi}"
+  export SYSML_TVCACHE_DIR="${SYSML_TVCACHE_DIR:-$ROOT/results/tvcache}"
+  export SYSML_TVCACHE_SOCK="${SYSML_TVCACHE_SOCK:-$SYSML_TVCACHE_DIR/tvcache.sock}"
+  export SYSML_TVCACHE_HOST="${SYSML_TVCACHE_HOST:-127.0.0.1}"
+  export SYSML_TVCACHE_PORT="${SYSML_TVCACHE_PORT:-7878}"
+fi
 WAVE_DIR="results/characterization/${PREFIX}"
 LOG="$WAVE_DIR/run-batched.log"
+if [[ "$CACHE_MODE" == "sequential" ]]; then
+  export SYSML_TVCACHE_METRICS="${SYSML_TVCACHE_METRICS:-$WAVE_DIR/tvcache-metrics.jsonl}"
+fi
 REMOTE_ROOT="${SYSML_REMOTE_ROOT:?Set SYSML_REMOTE_ROOT (e.g. /pscratch/sd/<letter>/<user>/sysml_parallel_tvcache)}"
 NERSC_USER="${SYSML_NERSC_USER:?Set SYSML_NERSC_USER}"
 SSH_HOST="${SYSML_SSH_HOST:-perlmutter}"
@@ -277,10 +287,17 @@ bridge_up() {
   chmod 600 .local-smoke/gateway.env
   local vol="sysml-model-m4999-${job}"
   local compose=".local-smoke/m4999-${job}-compose.json"
-  python3 - "$compose" "$vol" <<'PY'
-import json,sys
+  local tvcache_dir="${SYSML_TVCACHE_DIR:-$ROOT/results/tvcache}"
+  mkdir -p "$tvcache_dir"
+  python3 - "$compose" "$vol" "$CACHE_MODE" "$tvcache_dir" <<'PY'
+import json, sys
 from pathlib import Path
-Path(sys.argv[1]).write_text(json.dumps({"services":{"main":{"volumes":[{"type":"volume","source":"model-bridge","target":"/run/sysml-model","read_only":True}]}},"volumes":{"model-bridge":{"external":True,"name":sys.argv[2]}}})+"\n")
+compose, vol, mode, tvdir = sys.argv[1:5]
+vols = [{"type": "volume", "source": "model-bridge", "target": "/run/sysml-model", "read_only": True}]
+named = {"model-bridge": {"external": True, "name": vol}}
+if mode == "sequential":
+    vols.append({"type": "bind", "source": tvdir, "target": "/run/sysml-tvcache"})
+Path(compose).write_text(json.dumps({"services": {"main": {"volumes": vols}}, "volumes": named}) + "\n")
 PY
   mkdir -p "results/m4999-${job}-model-records"
   docker rm -f "sysml-gateway-m4999-${job}" 2>/dev/null || true
@@ -315,11 +332,20 @@ PY
 }
 
 teardown_serve() {
+  # Recycles NERSC/Mac model bridge only. Keep TVCache server+gateway up for the
+  # whole wave so TCG hits accumulate across alloc recycles.
   stop_gpu_mon
   ssh -o BatchMode=yes "$SSH_HOST" "scancel ${JOB:-}" 2>/dev/null || true
   docker rm -f "sysml-gateway-m4999-${JOB:-}" 2>/dev/null || true
   pkill -f "ssh .* -L 127.0.0.1:${LOCAL_PORT}:" 2>/dev/null || true
   wait "${SERVE_PID:-}" 2>/dev/null || true
+}
+
+teardown_tvcache() {
+  if [[ "$CACHE_MODE" == "sequential" ]]; then
+    bash "$ROOT/scripts/tvcache_tool_gateway.sh" stop 2>/dev/null || true
+    bash "$ROOT/scripts/tvcache_server.sh" stop 2>/dev/null || true
+  fi
 }
 
 backend_ok() {
@@ -334,7 +360,9 @@ PY
 run_task() {
   local task="$1"
   local job_name="${PREFIX}-${task}"
-  echo "=== $job_name  (k=$K n=$N harbor=$HARBOR_AGENT agent=$AGENT) ===" | tee -a "$LOG"
+  export SYSML_CURRENT_TASK="$task"
+  export SYSML_TVCACHE_TASK_ID="$task"
+  echo "=== $job_name  (k=$K n=$N harbor=$HARBOR_AGENT agent=$AGENT mode=$CACHE_MODE) ===" | tee -a "$LOG"
   local -a harbor_cmd=(
     harbor run
     -p "$TASK_ROOT/$task"
@@ -371,14 +399,25 @@ run_task() {
   .venv/bin/python scripts/check_trial.py "jobs/$job_name" || true
 }
 
+ensure_tvcache() {
+  if [[ "$CACHE_MODE" != "sequential" ]]; then
+    return 0
+  fi
+  echo "=== TVCache sequential: server + tool gateway ===" | tee -a "$LOG"
+  bash "$ROOT/scripts/tvcache_server.sh" start | tee -a "$LOG"
+  bash "$ROOT/scripts/tvcache_tool_gateway.sh" start | tee -a "$LOG"
+}
+
 ensure_serve() {
   if [[ -n "${JOB:-}" ]] && backend_ok; then
+    ensure_tvcache
     return 0
   fi
   echo "starting/restarting serve" | tee -a "$LOG"
   teardown_serve || true
   serve_up
   bridge_up "$JOB" "$NODE"
+  ensure_tvcache
   stop_gpu_mon
   # --background writes only to gpu-monitor.log (no double-tee / redirect dup).
   GPU_MON_PID=$(
@@ -403,6 +442,7 @@ if [[ -n "${SYSML_ATTACH_JOB:-}" ]]; then
     echo "ATTACH bridge_up failed; leaving NERSC job $JOB running" | tee -a "$LOG"
     exit 2
   fi
+  ensure_tvcache
   stop_gpu_mon
   GPU_MON_PID=$(
     SYSML_JOB_PREFIX="$PREFIX" SYSML_SSH_HOST="$SSH_HOST" SYSML_NERSC_USER="$NERSC_USER" \
@@ -419,7 +459,7 @@ if [[ -n "${SYSML_ATTACH_JOB:-}" ]]; then
   fi
 fi
 
-trap 'teardown_serve; echo TRAPPED_EXIT | tee -a "$LOG"' EXIT
+trap 'teardown_serve; teardown_tvcache; echo TRAPPED_EXIT | tee -a "$LOG"' EXIT
 
 tasks_on_alloc=0
 idx=0

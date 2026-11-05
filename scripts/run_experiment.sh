@@ -2,17 +2,16 @@
 # One shared runner for Experiments A/B/C.
 #
 #   bash scripts/run_experiment.sh none         # Experiment A only
-#   bash scripts/run_experiment.sh sequential   # Experiment B only
-#   bash scripts/run_experiment.sh parallel     # Experiment C only
+#   bash scripts/run_experiment.sh sequential   # Experiment B (TVCache sequential)
+#   bash scripts/run_experiment.sh parallel     # Experiment C only (stub)
 #   bash scripts/run_experiment.sh all          # A then B then C
 #
 # Forced-parallel stress (NOT Exp A characterization) — same wave, MultitoolLoopbackPi:
 #   bash scripts/run_experiment.sh none --parallel-test
 #
 # Mode may also come from SYSML_CACHE_MODE if no mode argument is given.
-# Same Harbor/NERSC wave for every mode; only the cache flag differs.
+# Same Harbor/NERSC wave for every mode; only the cache flag / agent differs.
 # Wave defaults: SYSML_PASS_K=SYSML_HARBOR_N=SYSML_MAX_NUM_SEQS=5 (concurrent rollouts).
-# Today only "none" is wired (no tvclient on the tool path yet).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -28,9 +27,11 @@ for arg in "$@"; do
       cat <<EOF
 Usage: bash scripts/run_experiment.sh {none|sequential|parallel|all} [--parallel-test]
 
-  none|sequential|parallel|all   Exp A/B/C cache mode (only none wired today)
-  --parallel-test                Forced multi-tool stress (MultitoolLoopbackPi +
-                                 stress task list). NOT natural characterization.
+  none         Experiment A (no TVCache)
+  sequential   Experiment B — paper TVCache via tool gateway + TvcacheLoopbackPi
+  parallel     Experiment C (stub until parallel-aware cache)
+  all          A, then B, then C
+  --parallel-test   Forced multi-tool stress (MultitoolLoopbackPi). NOT natural Exp A.
 EOF
       exit 0
       ;;
@@ -58,14 +59,13 @@ run_mode() {
   local m="$1"
   export SYSML_CACHE_MODE="$m"
   case "$m" in
-    none)
+    none|sequential)
       bash scripts/run_harbor_wave.sh
       ;;
-    sequential|parallel)
+    parallel)
       cat >&2 <<EOF
-SYSML_CACHE_MODE=$m is not wired yet (need tvclient on Pi tool-execute).
-Re-run with: bash scripts/run_experiment.sh none
-Or wait until Experiment $([[ $m == sequential ]] && echo B || echo C) lands — then this same command will run that mode only (it does not re-run other modes).
+SYSML_CACHE_MODE=parallel is not wired yet (Exp C parallel-aware TVCache).
+Re-run with: bash scripts/run_experiment.sh sequential
 EOF
       return 3
       ;;
