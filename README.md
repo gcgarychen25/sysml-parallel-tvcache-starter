@@ -177,8 +177,11 @@ set -a && source configs/models/qwen3.8-27b-tmax-easy8-tvcache-seq.env.example &
 export SYSML_NERSC_USER=<user>
 export SYSML_REMOTE_ROOT=/pscratch/sd/<letter>/<user>/sysml_parallel_tvcache
 bash scripts/run_experiment.sh sequential
-# metrics: results/characterization/$SYSML_JOB_PREFIX/tvcache-metrics.jsonl
+# metrics + Table 2 summary (also written automatically at end of sequential waves):
+#   results/characterization/$SYSML_JOB_PREFIX/tvcache-metrics.jsonl
+#   results/characterization/$SYSML_JOB_PREFIX/tvcache-summary.json
 python scripts/analyze_tvcache_metrics.py results/characterization/$SYSML_JOB_PREFIX/tvcache-metrics.jsonl
+# → per_call_hit_rate, per_turn_hit_rate (from jobs/ Pi sessions), tool_wait_saved_rate
 ```
 
 ### Handout tables (filled from T2 where possible)

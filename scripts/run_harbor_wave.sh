@@ -515,5 +515,13 @@ done
 teardown_serve
 trap - EXIT
 echo "DONE wave under prefix $PREFIX (k=$K n=$N max_num_seqs=$MAX_NUM_SEQS max_len=$MAX_LEN turns=$SYSML_MAX_TURNS thinking=$SYSML_THINKING gpus=$GPUS tp=$TP_SIZE task_parallel=$TASK_PARALLEL tasks=${#need[@]})" | tee -a "$LOG"
+if [[ "$CACHE_MODE" == "sequential" ]]; then
+  _tm="${SYSML_TVCACHE_METRICS:-$WAVE_DIR/tvcache-metrics.jsonl}"
+  if [[ -f "$_tm" ]]; then
+    echo "=== TVCache Table 2 summary (call/turn hit + tool-wait saved) ===" | tee -a "$LOG"
+    .venv/bin/python scripts/analyze_tvcache_metrics.py "$_tm" \
+      -o "$WAVE_DIR/tvcache-summary.json" 2>&1 | tee -a "$LOG" || true
+  fi
+fi
 echo "Analyze: bash scripts/analyze_characterization_wave.sh $PREFIX" | tee -a "$LOG"
 echo "GPU log: $WAVE_DIR/gpu-monitor.log" | tee -a "$LOG"
