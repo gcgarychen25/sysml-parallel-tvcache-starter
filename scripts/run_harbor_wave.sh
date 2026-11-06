@@ -154,6 +154,14 @@ fi
 echo "PREFIX=$PREFIX HARBOR_AGENT=$HARBOR_AGENT AGENT=$AGENT K=$K N=$N MAX_NUM_SEQS=$MAX_NUM_SEQS MAX_LEN=$MAX_LEN CTX=$SYSML_CONTEXT_WINDOW TURNS=$SYSML_MAX_TURNS THINKING=$SYSML_THINKING GPU_MEM=$GPU_MEM GPUS=$GPUS TP=$TP_SIZE MEM=$MEM CPUS=$CPUS_PER_TASK QOS=$SLURM_QOS MODE=$CACHE_MODE tasks=${#tasks[@]} per_alloc=$TASKS_PER_ALLOC task_parallel=$TASK_PARALLEL" | tee -a "$LOG"
 echo "REMOTE_ROOT=$REMOTE_ROOT NERSC_USER=$NERSC_USER SSH_HOST=$SSH_HOST ACCOUNT=$SLURM_ACCOUNT TASK_LIST=$TASK_LIST TASK_ROOT=$TASK_ROOT" | tee -a "$LOG"
 
+# Bring TVCache up before the long NERSC serve wait so ensure_tvcache is a no-op
+# after READY (avoids cold-import races killing the alloc via set -e + EXIT trap).
+if [[ "$CACHE_MODE" == "sequential" ]]; then
+  echo "=== TVCache early start (before serve) ===" | tee -a "$LOG"
+  bash "$ROOT/scripts/tvcache_server.sh" start | tee -a "$LOG"
+  bash "$ROOT/scripts/tvcache_tool_gateway.sh" start | tee -a "$LOG"
+fi
+
 for task in "${tasks[@]}"; do
   [[ -f "$TASK_ROOT/$task/task.toml" ]] || {
     echo "Missing task: $TASK_ROOT/$task (prepare_task.py --setup-as-agent-actions, or SYSML_PREPARE=1 with SYSML_PARALLEL_STRESS=1)" >&2
@@ -512,7 +520,8 @@ while [[ "$idx" -lt "${#need[@]}" ]]; do
   fi
 done
 
-teardown_serve
+# Do not let teardown failures (scancel/ssh) trip set -e before DONE/analyze.
+teardown_serve || true
 trap - EXIT
 echo "DONE wave under prefix $PREFIX (k=$K n=$N max_num_seqs=$MAX_NUM_SEQS max_len=$MAX_LEN turns=$SYSML_MAX_TURNS thinking=$SYSML_THINKING gpus=$GPUS tp=$TP_SIZE task_parallel=$TASK_PARALLEL tasks=${#need[@]})" | tee -a "$LOG"
 if [[ "$CACHE_MODE" == "sequential" ]]; then

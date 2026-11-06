@@ -95,7 +95,7 @@ scripts/
   run_experiment.sh           mode = none|sequential|parallel|all; add --parallel-test for stress
   run_harbor_wave.sh          NERSC + Harbor (Exp A default; sequential → TvcacheLoopbackPi)
   tvcache_server.sh           start/stop paper tvcache-rust (:7878)
-  tvcache_tool_gateway.sh     start/stop host tool gateway (Unix sock)
+  tvcache_tool_gateway.sh     start/stop host tool gateway (TCP :17878)
   tvcache_client_smoke.py     insert/find smoke against tvcache-rust
   analyze_tvcache_metrics.py  summarize Exp B hit/miss JSONL
   nersc_serve_model.sbatch    vLLM on NERSC (reads SYSML_MAX_NUM_SEQS, etc.)
@@ -148,7 +148,7 @@ docker build -f configs/model-gateway.Dockerfile -t sysml-model-gateway:refactor
 # Exp B smoke (no Harbor): build+start paper TVCache server, insert/find round-trip
 bash scripts/tvcache_server.sh start
 PYTHONPATH=vendor/tvclient:. python scripts/tvcache_client_smoke.py
-bash scripts/tvcache_tool_gateway.sh start    # Unix sock → tvclient
+bash scripts/tvcache_tool_gateway.sh start    # TCP :17878 → tvclient (prefer screen / daemonize; Cursor nohup can reap)
 bash scripts/tvcache_tool_gateway.sh stop
 bash scripts/tvcache_server.sh stop
 ```
@@ -158,7 +158,7 @@ bash scripts/tvcache_server.sh stop
 | Experiment | Mode flag | What we measure | Status |
 | --- | --- | --- | --- |
 | **A** | `none` | Reward; parallel-turn fraction; cross-rollout TCG prefix | **Harbor + Pi** throughout (except B1 Mini-SWE). DeepSWE tasks ×9B/27B: reward 0 (task hard). **Pipeline proven** on **TMax** short tasks ×27B×Pi: **T1 5/5**, **T2 40/40** reward 1.0 on 8 valid tasks — `docs/workload_characterization_report.md` |
-| **B** | `sequential` | Sequential TVCache hit rate / tool-wait (shared TCG across concurrent pass@k) | **Pipeline verified** (2026-11-05) on 3 TMax tasks × pass@5 — TCP gateway + `/home/user` sandbox workdir. Pilot hit rate ~16% (94 calls / 15 hits). Full matched TMax-8 wave still open for handout Table 2 fill. |
+| **B** | `sequential` | Sequential TVCache hit rate / tool-wait (shared TCG across concurrent pass@k) | **Matched TMax-8 done** (2026-11-05): prefix `tmax-qwen38-27b-easy8-tvcache-seq-t100-xh` — **40/40** reward 1.0 · call hit **9.0%** · turn hit **8.7%** · tool-wait saved **−5.2%** (outlier slow hit). TCP gateway + `/home/user`. |
 | **C** | `parallel` | Parallel-aware TVCache (within-turn N>1) | Natural parallel >0 on 27B×Pi (DeepSWE-tasks ~5%, TMax ~15–24%); forced Multitool stress separate (`docs/parallel_prompt_stress_report.md`) |
 
 One runner; pick the mode you want (A-only, B-only, C-only, or `all`). It does **not** re-run other modes unless you pass `all`.
@@ -235,14 +235,13 @@ CDF = fraction of assistant turns with **at most** *k* model-emitted tool calls 
 | Configuration | Per-call hit rate (%) | Per-turn hit rate (%) | Tool-wait time saved (%) | pass@1 | pass@5 |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | **No cache reuse** (Exp A `none`, matched contract above) | N/A | N/A | **0** (reference) | **8/8 (100%)** | **8/8 (100%)** |
-| Existing single-call TVCache (Exp B) | **~16%** (pilot) | TBD | TBD | **3/3** (pilot) | **3/3** (pilot) |
+| Existing single-call TVCache (Exp B) | **9.0%** | **8.7%** | **−5.2%** | **8/8 (100%)** | **8/8 (100%)** |
 | Parallel-aware TVCache (Exp C) | TBD | TBD | TBD | TBD | TBD |
 
-**pass@5 (no-cache T2):** task solved if any of the 5 concurrent trials has verifier reward 1.0 → **8/8** (all 40 graded trials reward 1.0).  
-**pass@1 (no-cache T2):** first trial per task among the k=5 batch → also **8/8**.
+**pass@5 (no-cache T2 / Exp B):** task solved if any of the 5 concurrent trials has verifier reward 1.0 → **8/8** (all 40 graded trials reward 1.0).  
+**pass@1:** first trial per task among the k=5 batch → also **8/8** (no-cache T2 and Exp B).
 
-**Exp B pilot (2026-11-05, same knobs as matched contract, 3/8 TMax ids):**  
-`task_004783_a0ba89ed` · `task_004205_b4f9a6a8` · `task_004019_52b6d9d0` — prefixes `tmax-qwen38-27b-easy1-tvcache-seq-t100-xh` + `…-easy2-…`. Graded trials: **14/15 reward 1.0** (one `AgentTimeoutError` on 004783 after solve path); both easy2 tasks **5/5**. Pooled `tvcache-metrics.jsonl`: **94** tool events · **15** hits · **79** misses → **~16%** per-call hit rate (cross-rollout reuse observed). Transport: Pi → TCP `host.docker.internal:17878` → Mac tool gateway → `tvcache-rust` (Docker Desktop cannot use Mac-host AF_UNIX bind mounts). Sandbox `docker exec -w /home/user`. **Full TMax-8 Exp B wave still needed** for handout-final Table 2 / tool-wait %. Exp C still stub.
+**Exp B matched TMax-8 (2026-11-05):** prefix `tmax-qwen38-27b-easy8-tvcache-seq-t100-xh` · env `configs/models/qwen3.8-27b-tmax-easy8-tvcache-seq.env.example` · agent `TvcacheLoopbackPi`. **40/40** reward 1.0. Metrics (`tvcache-metrics.jsonl` / `tvcache-summary.json`): **256** tool calls · **23** hits · **233** misses → **9.0%** per-call · **8.7%** per-turn (18/208 tool-turns with ≥1 hit) · tool-wait saved **−5.2%** vs typical-miss counterfactual (median clean miss ≈0.27s; one pathological ~76s “hit” dominates — without outliers, hits are ~1ms). Transport: Pi → TCP `host.docker.internal:17878` → Mac tool gateway → `tvcache-rust` (Docker Desktop cannot use Mac-host AF_UNIX bind mounts). Sandbox `docker exec -w /home/user`. Earlier 3-task pilot (~16% hit) was warm-up only. Exp C still stub.
 
 ### Experiment A — primary completed cell (2026-11-01)
 
@@ -276,7 +275,7 @@ bash scripts/run_experiment.sh none   # prefer Terminal.app / screen
 | Owner track | Status |
 | --- | --- |
 | Exp A (`none`) | Cells through **T2** — DeepSWE **tasks** stay reward 0; **same Pi harness** + TMax tasks → reward 1.0 (pipeline OK). Mini-SWE = B1 only |
-| Exp B sequential TVCache | **Pipeline OK** on 3 TMax tasks (pilot ~16% hit). Next: matched **TMax-8** wave for final Table 2 — coordinate with Saifei |
+| Exp B sequential TVCache | **Matched TMax-8 Table 2 filled** (9.0% / 8.7% / −5.2%; 40/40). Coordinate Exp C with Saifei |
 | Exp C | Natural parallel already >0 on 27B×Pi; forced Multitool stress optional — see stress report |
 
 ### Experiment A — historical 3-task cell (2026-10-30)

@@ -31,7 +31,7 @@
 | **T1** | `tmax-qwen38-27b-easy1-t100-xh` | 256K / 100 / 32K | **xhigh** | **4** | **TMax** `task_004783_a0ba89ed` ×5 · **27B** · **Pi** | 5/5 | **5/5** | **0.241** (7/29) | pipeline OK | — | Reward **1.0** (~5–7 turns). Stock `LoopbackPi`; natural prompt (no Multitool). Not DeepSWE tasks; not Mini-SWE. |
 | **T2** | `tmax-qwen38-27b-easy10-t100-xh` | 256K / 100 / 32K | **xhigh** | **4** | **TMax** short×10 × pass@5 · **27B** · **Pi** | **45** Pi / **50** trials | **40/50** | **0.147** (43/293) | DeepSWE **task** hardness (harness OK) | — | **Valid: 8/8 tasks = 40/40 reward 1.0.** Same Harbor+Pi path as A*; only task suite changed. Timeouts (not model fails): `001033` env-start×5 (no Pi session); `009942` agent 600s×5. |
 
-Env examples: `configs/models/qwen3.5-9b-pilot.env.example` (A0) · `…-a1-tp4-256k.env.example` (A1) · `…-a2-pilot1-t500` / `…-think-pilot1-clack` / `…-kvpack-tp2-think-high` (A2*) · `…/qwen3.8-27b-pilot1-clack.env.example` (A3) · `…/qwen3.8-27b-happydom-pi` (A3b) · `…/qwen3.8-27b-happydom-miniswe` (B1) · `…/qwen3.8-flash-happydom-pi` (B2) · `…/qwen3.8-27b-tmax-easy-pi` (T1) · `…/qwen3.8-27b-tmax-easy10-pi` (T2).
+Env examples: `configs/models/qwen3.5-9b-pilot.env.example` (A0) · `…-a1-tp4-256k.env.example` (A1) · `…-a2-pilot1-t500` / `…-think-pilot1-clack` / `…-kvpack-tp2-think-high` (A2*) · `…/qwen3.8-27b-pilot1-clack.env.example` (A3) · `…/qwen3.8-27b-happydom-pi` (A3b) · `…/qwen3.8-27b-happydom-miniswe` (B1) · `…/qwen3.8-flash-happydom-pi` (B2) · `…/qwen3.8-27b-tmax-easy-pi` (T1) · `…/qwen3.8-27b-tmax-easy10-pi` (T2) · `…/qwen3.8-27b-tmax-easy8-tvcache-seq.env.example` (Exp B).
 
 Analyze: `bash scripts/analyze_characterization_wave.sh <prefix>` (optional `--benchmark TMax` — default label is `DeepSWE` and is **only a JSON tag**, not the harness). Artifacts: `results/characterization/<prefix>/` (`manifest.json`, `parallel_summary.json`, `run-batched.log`).
 
@@ -73,13 +73,14 @@ Analyze: `bash scripts/analyze_characterization_wave.sh <prefix>` (optional `--b
 
 ---
 
-## Exp B pilot — sequential TVCache (2026-11-05)
+## Exp B — sequential TVCache (2026-11-05)
 
 **Not** an Exp A cell. Same matched knobs as T2 / README Table 2 (Harbor+Pi · 27B · pass@5 · 256K/100/xhigh/TP4), mode `sequential` (`TvcacheLoopbackPi` + Mac `tvcache-rust` + TCP tool gateway).
 
-| Pilot wave | Prefix | Tasks | Reward | TVCache tools |
+| Wave | Prefix | Tasks | Reward | TVCache tools / Table 2 |
 | --- | --- | --- | --- | --- |
-| easy1 | `tmax-qwen38-27b-easy1-tvcache-seq-t100-xh` | `004783` | **4/5** (+1 `AgentTimeoutError`) | 34 calls · 8 hits |
-| easy2 | `tmax-qwen38-27b-easy2-tvcache-seq-t100-xh` | `004205`, `004019` | **5/5** + **5/5** | 60 calls · 7 hits |
+| easy1 (pilot) | `tmax-qwen38-27b-easy1-tvcache-seq-t100-xh` | `004783` | **4/5** (+1 `AgentTimeoutError`) | 34 calls · 8 hits |
+| easy2 (pilot) | `tmax-qwen38-27b-easy2-tvcache-seq-t100-xh` | `004205`, `004019` | **5/5** + **5/5** | 60 calls · 7 hits |
+| **easy8 (handout)** | `tmax-qwen38-27b-easy8-tvcache-seq-t100-xh` | all 8 ids in `experiment-tasks-tmax-easy8.txt` | **40/40** (pass@5 **8/8**) | **256** calls · **23** hits · call **9.0%** · turn **8.7%** (18/208) · tool-wait saved **−5.2%** |
 
-Pooled pilot hit rate **15/94 ≈ 16%**. Ops lessons: Pi↔gateway must be **TCP** (`host.docker.internal:17878`); TMax sandbox workdir **`/home/user`** (not `/app`). Full TMax-8 Exp B wave still open for handout Table 2. Teammate entry: root `README.md`.
+Handout Table 2 Exp B row = **easy8** (`tvcache-summary.json`). Pilot pooled ~16% hit was 3-task warm-up only. Tool-wait % is vs median clean miss (<5s); one ~76s labeled hit makes the counterfactual negative — typical hits are ~1ms. Ops: Pi↔gateway **TCP** `host.docker.internal:17878`; sandbox workdir **`/home/user`**; start TVCache via `screen` / `os.setsid` (Cursor-shell `nohup` can reap `:17878`). Teammate entry: root `README.md`.

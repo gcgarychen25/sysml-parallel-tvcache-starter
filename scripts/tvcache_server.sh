@@ -44,8 +44,31 @@ cmd_start() {
   fi
   ensure_binary
   # Server binds 0.0.0.0:7878; HOST is for clients.
-  nohup "$BIN" >>"$LOG_FILE" 2>&1 &
-  echo $! >"$PID_FILE"
+  # Detach from Cursor/agent process groups (see tool gateway).
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$BIN" >>"$LOG_FILE" 2>&1 &
+    echo $! >"$PID_FILE"
+  else
+    # macOS: double-fork + setsid so IDE shell teardown cannot reap us.
+    python3 - "$PID_FILE" "$LOG_FILE" "$BIN" <<'PY'
+import os, sys
+pid_file, log_file, binary = sys.argv[1:4]
+if os.fork() > 0:
+    sys.exit(0)
+os.setsid()
+if os.fork() > 0:
+    sys.exit(0)
+os.chdir("/")
+fd = os.open(log_file, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+os.dup2(fd, 1)
+os.dup2(fd, 2)
+if fd > 2:
+    os.close(fd)
+with open(pid_file, "w", encoding="utf-8") as f:
+    f.write(str(os.getpid()))
+os.execv(binary, [binary])
+PY
+  fi
   for _ in $(seq 1 50); do
     if (echo >/dev/tcp/127.0.0.1/"$PORT") >/dev/null 2>&1; then
       echo "STARTED tvcache-rust pid=$(cat "$PID_FILE") client=$HOST:$PORT log=$LOG_FILE"
