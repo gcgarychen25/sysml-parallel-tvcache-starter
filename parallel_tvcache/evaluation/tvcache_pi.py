@@ -1,8 +1,8 @@
 """LoopbackPi + TVCache tool gateway extension (Exp B sequential).
 
-Tools RPC to the Mac-side gateway over ``/run/sysml-tvcache/tvcache.sock``.
-Requires ``SYSML_CACHE_MODE=sequential``, running ``tvcache-rust`` + tool gateway,
-and a compose bind of ``results/tvcache`` → ``/run/sysml-tvcache``.
+Tools RPC to the Mac-side gateway over TCP
+(``host.docker.internal:SYSML_TVCACHE_GATEWAY_PORT``, default 17878).
+Requires ``SYSML_CACHE_MODE=sequential`` and running ``tvcache-rust`` + tool gateway.
 """
 
 from __future__ import annotations
@@ -22,9 +22,7 @@ class TvcacheLoopbackPi(LoopbackPi):
 
     async def install(self, environment):
         await super().install(environment)
-        await environment.exec(
-            command="mkdir -p /tmp/harbor-pi-agent /run/sysml-tvcache"
-        )
+        await environment.exec(command="mkdir -p /tmp/harbor-pi-agent")
         await environment.upload_file(_EXTENSION_SRC, _REMOTE_EXTENSION)
 
     def build_cli_flags(self) -> str:
@@ -41,9 +39,13 @@ class TvcacheLoopbackPi(LoopbackPi):
             or "harbor-task"
         )
         rollout = os.environ.get("SYSML_TVCACHE_ROLLOUT_ID") or ""
+        gw_host = os.environ.get("SYSML_TVCACHE_GATEWAY_HOST", "host.docker.internal")
+        gw_port = os.environ.get("SYSML_TVCACHE_GATEWAY_PORT", "17878")
         cmd = (
             "mkdir -p /tmp/harbor-pi-agent && "
-            f"printf '%s' {shlex.quote(task_id)} > /tmp/harbor-pi-agent/tvcache-task-id"
+            f"printf '%s' {shlex.quote(task_id)} > /tmp/harbor-pi-agent/tvcache-task-id && "
+            f"printf '%s' {shlex.quote(gw_host)} > /tmp/harbor-pi-agent/tvcache-gw-host && "
+            f"printf '%s' {shlex.quote(gw_port)} > /tmp/harbor-pi-agent/tvcache-gw-port"
         )
         if rollout:
             cmd += (

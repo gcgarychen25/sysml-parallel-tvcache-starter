@@ -1,12 +1,18 @@
 /**
  * Pi extension: route bash/read/edit/write through the host TVCache tool gateway.
- * Socket path inside the agent container: /run/sysml-tvcache/tvcache.sock
+ *
+ * Docker Desktop cannot use a Mac-host AF_UNIX socket from Linux containers
+ * (inode visible, connect ECONNREFUSED). Agents use TCP to host.docker.internal.
  */
 import * as net from "node:net";
 import * as fs from "node:fs";
 import * as os from "node:os";
 
-const SOCK = process.env.SYSML_TVCACHE_SOCK || "/run/sysml-tvcache/tvcache.sock";
+const GATEWAY_HOST =
+  process.env.SYSML_TVCACHE_GATEWAY_HOST || "host.docker.internal";
+const GATEWAY_PORT = Number(
+  process.env.SYSML_TVCACHE_GATEWAY_PORT || "17878"
+);
 
 function readTrim(path: string, fallback: string): string {
   try {
@@ -31,11 +37,10 @@ const ROLLOUT_ID = readTrim(
 
 function rpc(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
-    if (!fs.existsSync(SOCK)) {
-      reject(new Error(`TVCache gateway sock missing: ${SOCK}`));
-      return;
-    }
-    const client = net.createConnection(SOCK);
+    const client = net.createConnection({
+      host: GATEWAY_HOST,
+      port: GATEWAY_PORT,
+    });
     let buf = "";
     const timer = setTimeout(() => {
       client.destroy();

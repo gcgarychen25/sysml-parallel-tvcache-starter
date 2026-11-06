@@ -59,12 +59,12 @@ run_experiment.sh none
 
 | Step | Code | What it does |
 | --- | --- | --- |
-| Mode | `scripts/run_experiment.sh` | `none` → wave; `sequential` / `parallel` stub until TVCache is wired |
+| Mode | `scripts/run_experiment.sh` | `none` → Exp A; `sequential` → Exp B (`TvcacheLoopbackPi`); `parallel` still stub |
 | Serve | `serve_up()` in `scripts/run_harbor_wave.sh` → `scripts/nersc_serve_model.sbatch` | `salloc --gpus-per-node=$SYSML_GPUS`, then `vllm serve --tensor-parallel-size $SYSML_TENSOR_PARALLEL_SIZE` |
 | Bridge | `bridge_up()` in `scripts/run_harbor_wave.sh` | SSH forward + `sysml-model-gateway` (OpenAI Chat Completions proxy: `model.sock` → tunnel → vLLM) |
-| Harbor | `run_task()` → `harbor run … -a …LoopbackPi` | Builds agent/verifier containers from the task folder; spawns up to **n** Pi agents |
-| Pi | `parallel_tvcache/evaluation/loopback_pi.py` | Official Harbor Pi + in-sandbox model relay; tools stay in the agent container |
-| TVCache | — | **Not started** for `none`. Exp B/C will share one Mac-side `tvcache-rust` across the concurrent rollouts |
+| Harbor | `run_task()` → `harbor run … -a …LoopbackPi` / `TvcacheLoopbackPi` | Builds agent/verifier containers from the task folder; spawns up to **n** Pi agents |
+| Pi | `loopback_pi.py` / `tvcache_pi.py` | Official Harbor Pi + in-sandbox model relay; Exp B tools RPC to Mac TVCache gateway over **TCP** `host.docker.internal:17878` |
+| TVCache | `tvcache_server.sh` + `tvcache_tool_gateway.sh` | **Off** for `none`. Exp B starts Mac `tvcache-rust` + tool gateway; shared across concurrent pass@k rollouts |
 
 **GPUs vs concurrency:** Five rollouts are five Chat Completions clients to one vLLM (`--max-num-seqs 5`). At **8K** context, **1×A100** is enough (cell A0). At **256K×5**, KV needs **tensor parallel** across multiple GPUs (cell A1: 4×A100, `--tensor-parallel-size 4`) — not a second replica.
 
@@ -158,7 +158,7 @@ bash scripts/tvcache_server.sh stop
 | Experiment | Mode flag | What we measure | Status |
 | --- | --- | --- | --- |
 | **A** | `none` | Reward; parallel-turn fraction; cross-rollout TCG prefix | **Harbor + Pi** throughout (except B1 Mini-SWE). DeepSWE tasks ×9B/27B: reward 0 (task hard). **Pipeline proven** on **TMax** short tasks ×27B×Pi: **T1 5/5**, **T2 40/40** reward 1.0 on 8 valid tasks — `docs/workload_characterization_report.md` |
-| **B** | `sequential` | Sequential TVCache hit rate / tool-wait (shared TCG across concurrent pass@k) | **Wired** — `tvcache-rust` + host tool gateway + `TvcacheLoopbackPi`; run matched TMax-8 via `configs/models/qwen3.8-27b-tmax-easy8-tvcache-seq.env.example`. Table 2 Exp B row still TBD until full wave metrics. |
+| **B** | `sequential` | Sequential TVCache hit rate / tool-wait (shared TCG across concurrent pass@k) | **Pipeline verified** (2026-11-05) on 3 TMax tasks × pass@5 — TCP gateway + `/home/user` sandbox workdir. Pilot hit rate ~16% (94 calls / 15 hits). Full matched TMax-8 wave still open for handout Table 2 fill. |
 | **C** | `parallel` | Parallel-aware TVCache (within-turn N>1) | Natural parallel >0 on 27B×Pi (DeepSWE-tasks ~5%, TMax ~15–24%); forced Multitool stress separate (`docs/parallel_prompt_stress_report.md`) |
 
 One runner; pick the mode you want (A-only, B-only, C-only, or `all`). It does **not** re-run other modes unless you pass `all`.
@@ -232,12 +232,14 @@ CDF = fraction of assistant turns with **at most** *k* model-emitted tool calls 
 | Configuration | Per-call hit rate (%) | Per-turn hit rate (%) | Tool-wait time saved (%) | pass@1 | pass@5 |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | **No cache reuse** (Exp A `none`, matched contract above) | N/A | N/A | **0** (reference) | **8/8 (100%)** | **8/8 (100%)** |
-| Existing single-call TVCache (Exp B) | TBD (run wave) | TBD | TBD | TBD | TBD |
+| Existing single-call TVCache (Exp B) | **~16%** (pilot) | TBD | TBD | **3/3** (pilot) | **3/3** (pilot) |
 | Parallel-aware TVCache (Exp C) | TBD | TBD | TBD | TBD | TBD |
 
-**pass@5:** task solved if any of the 5 concurrent trials has verifier reward 1.0 → **8/8** (all 40 graded trials reward 1.0).  
-**pass@1:** first trial per task among the k=5 batch (earliest `result.json` mtime among the five Harbor trial dirs) → also **8/8** (every trial succeeded).  
-Exp B wiring is in-tree (`bash scripts/run_experiment.sh sequential`); fill hit-rate / tool-wait from `tvcache-metrics.jsonl` after the matched TMax-8 wave. Exp C still stub.
+**pass@5 (no-cache T2):** task solved if any of the 5 concurrent trials has verifier reward 1.0 → **8/8** (all 40 graded trials reward 1.0).  
+**pass@1 (no-cache T2):** first trial per task among the k=5 batch → also **8/8**.
+
+**Exp B pilot (2026-11-05, same knobs as matched contract, 3/8 TMax ids):**  
+`task_004783_a0ba89ed` · `task_004205_b4f9a6a8` · `task_004019_52b6d9d0` — prefixes `tmax-qwen38-27b-easy1-tvcache-seq-t100-xh` + `…-easy2-…`. Graded trials: **14/15 reward 1.0** (one `AgentTimeoutError` on 004783 after solve path); both easy2 tasks **5/5**. Pooled `tvcache-metrics.jsonl`: **94** tool events · **15** hits · **79** misses → **~16%** per-call hit rate (cross-rollout reuse observed). Transport: Pi → TCP `host.docker.internal:17878` → Mac tool gateway → `tvcache-rust` (Docker Desktop cannot use Mac-host AF_UNIX bind mounts). Sandbox `docker exec -w /home/user`. **Full TMax-8 Exp B wave still needed** for handout-final Table 2 / tool-wait %. Exp C still stub.
 
 ### Experiment A — primary completed cell (2026-11-01)
 
@@ -271,7 +273,7 @@ bash scripts/run_experiment.sh none   # prefer Terminal.app / screen
 | Owner track | Status |
 | --- | --- |
 | Exp A (`none`) | Cells through **T2** — DeepSWE **tasks** stay reward 0; **same Pi harness** + TMax tasks → reward 1.0 (pipeline OK). Mini-SWE = B1 only |
-| Exp B sequential TVCache | **Wired** — run `qwen3.8-27b-tmax-easy8-tvcache-seq.env.example`; coordinate with Saifei so we don’t duplicate the matched TMax-8 wave |
+| Exp B sequential TVCache | **Pipeline OK** on 3 TMax tasks (pilot ~16% hit). Next: matched **TMax-8** wave for final Table 2 — coordinate with Saifei |
 | Exp C | Natural parallel already >0 on 27B×Pi; forced Multitool stress optional — see stress report |
 
 ### Experiment A — historical 3-task cell (2026-10-30)

@@ -1,7 +1,9 @@
-"""Host-side TVCache tool gateway (Unix socket).
+"""Host-side TVCache tool gateway (TCP + optional Unix socket).
 
-Pi extensions RPC here; each (task_id, rollout_id) owns one TvcacheToolExecutor
-sharing the Mac-side tvcache-rust server across concurrent Harbor rollouts.
+Pi extensions inside Docker Desktop Linux VMs cannot use a Mac-host AF_UNIX
+socket (bind-mount shows the inode but connect is ECONNREFUSED). Agents RPC
+over TCP to ``host.docker.internal:SYSML_TVCACHE_GATEWAY_PORT`` (default 17878).
+Optional Unix listen remains for host-local smoke tests.
 """
 
 from __future__ import annotations
@@ -56,6 +58,8 @@ class RolloutSession:
     executor: TvcacheToolExecutor
     history: list[PiToolCall] = field(default_factory=list)
     closed: bool = False
+    # tvclient uses one asyncio stream per connection — serialize RPCs.
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 class ToolGateway:
@@ -64,15 +68,20 @@ class ToolGateway:
         host: str = "127.0.0.1",
         port: int = 7878,
         sock_path: str | None = None,
+        listen_host: str = "127.0.0.1",
+        listen_port: int = 17878,
     ):
         self.host = host
         self.port = port
-        self.sock_path = Path(
-            sock_path
-            or os.environ.get("SYSML_TVCACHE_SOCK", "results/tvcache/tvcache.sock")
-        )
+        self.listen_host = listen_host
+        self.listen_port = listen_port
+        raw_sock = sock_path if sock_path is not None else os.environ.get("SYSML_TVCACHE_SOCK")
+        self.sock_path = Path(raw_sock) if raw_sock else None
         self._sessions: dict[tuple[str, str], RolloutSession] = {}
         self._lock = asyncio.Lock()
+        # tvcache-rust client protocol is easy to desync under multi-conn races;
+        # serialize all cache RPCs for smoke/baseline correctness.
+        self._tv_lock = asyncio.Lock()
 
     async def get_session(
         self, task_id: str, rollout_id: str, container_id: str
@@ -84,25 +93,36 @@ class ToolGateway:
                 if container_id and sess.container_id != container_id:
                     sess.container_id = container_id
                 return sess
-            token = live_container_var.set(container_id)
-            try:
-                ex = TvcacheToolExecutor(
-                    HarborDockerSandbox,
-                    PiToolCall,
-                    task_id,
-                    host=self.host,
-                    port=self.port,
-                )
-                await ex.client.connect()
-                ex.set_rollout_id(rollout_id)
-            finally:
-                live_container_var.reset(token)
-            sess = RolloutSession(
-                task_id=task_id,
-                rollout_id=rollout_id,
-                container_id=container_id,
-                executor=ex,
+        token = live_container_var.set(container_id)
+        try:
+            ex = TvcacheToolExecutor(
+                HarborDockerSandbox,
+                PiToolCall,
+                task_id,
+                host=self.host,
+                port=self.port,
             )
+            await ex.client.connect()
+            ex.set_rollout_id(rollout_id)
+        finally:
+            live_container_var.reset(token)
+        sess = RolloutSession(
+            task_id=task_id,
+            rollout_id=rollout_id,
+            container_id=container_id,
+            executor=ex,
+        )
+        async with self._lock:
+            existing = self._sessions.get(key)
+            if existing and not existing.closed:
+                # Lost the create race — drop the spare connection.
+                try:
+                    await ex.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                if container_id and existing.container_id != container_id:
+                    existing.container_id = container_id
+                return existing
             self._sessions[key] = sess
             return sess
 
@@ -120,12 +140,13 @@ class ToolGateway:
         token_r = rollout_id_var.set(rollout_id)
         t0 = time.perf_counter()
         try:
-            sess.history.append(call)
-            # Hit ⇒ lookup_or_execute returns without sandbox execute.
-            before_exec = sess.executor.total_executions
-            result = await sess.executor.lookup_or_execute(list(sess.history))
-            elapsed = time.perf_counter() - t0
-            source = "hit" if sess.executor.total_executions == before_exec else "miss"
+            async with sess.lock, self._tv_lock:
+                sess.history.append(call)
+                # Hit ⇒ lookup_or_execute returns without sandbox execute.
+                before_exec = sess.executor.total_executions
+                result = await sess.executor.lookup_or_execute(list(sess.history))
+                elapsed = time.perf_counter() - t0
+                source = "hit" if sess.executor.total_executions == before_exec else "miss"
             log_metric(
                 {
                     "event": "tool",
@@ -211,14 +232,25 @@ async def _handle_client(
 
 
 async def serve_forever(gateway: ToolGateway) -> None:
-    gateway.sock_path.parent.mkdir(parents=True, exist_ok=True)
-    if gateway.sock_path.exists():
-        gateway.sock_path.unlink()
-    server = await asyncio.start_unix_server(
-        lambda r, w: _handle_client(r, w, gateway),
-        path=str(gateway.sock_path),
+    servers: list[asyncio.AbstractServer] = []
+    handler = lambda r, w: _handle_client(r, w, gateway)  # noqa: E731
+
+    tcp = await asyncio.start_server(handler, gateway.listen_host, gateway.listen_port)
+    servers.append(tcp)
+    LOG.info(
+        "tool gateway listening on tcp://%s:%s",
+        gateway.listen_host,
+        gateway.listen_port,
     )
-    LOG.info("tool gateway listening on %s", gateway.sock_path)
+
+    if gateway.sock_path is not None:
+        gateway.sock_path.parent.mkdir(parents=True, exist_ok=True)
+        if gateway.sock_path.exists():
+            gateway.sock_path.unlink()
+        unix = await asyncio.start_unix_server(handler, path=str(gateway.sock_path))
+        servers.append(unix)
+        LOG.info("tool gateway listening on unix:%s", gateway.sock_path)
+
     stop = asyncio.Event()
 
     def _stop(*_args: object) -> None:
@@ -230,9 +262,13 @@ async def serve_forever(gateway: ToolGateway) -> None:
             loop.add_signal_handler(sig, _stop)
         except NotImplementedError:
             pass
-    async with server:
+    try:
         await stop.wait()
-    await gateway.close_all()
+    finally:
+        for server in servers:
+            server.close()
+            await server.wait_closed()
+        await gateway.close_all()
 
 
 def main() -> None:
@@ -241,11 +277,29 @@ def main() -> None:
     p.add_argument("--host", default=os.environ.get("SYSML_TVCACHE_HOST", "127.0.0.1"))
     p.add_argument("--port", type=int, default=int(os.environ.get("SYSML_TVCACHE_PORT", "7878")))
     p.add_argument(
+        "--listen-host",
+        default=os.environ.get("SYSML_TVCACHE_GATEWAY_HOST", "127.0.0.1"),
+        help="TCP bind for Pi agents (Docker uses host.docker.internal)",
+    )
+    p.add_argument(
+        "--listen-port",
+        type=int,
+        default=int(os.environ.get("SYSML_TVCACHE_GATEWAY_PORT", "17878")),
+    )
+    p.add_argument(
         "--sock",
         default=os.environ.get("SYSML_TVCACHE_SOCK", "results/tvcache/tvcache.sock"),
+        help="Optional Unix socket (host-local). Empty string disables.",
     )
     args = p.parse_args()
-    gateway = ToolGateway(host=args.host, port=args.port, sock_path=args.sock)
+    sock = args.sock.strip() or None
+    gateway = ToolGateway(
+        host=args.host,
+        port=args.port,
+        sock_path=sock,
+        listen_host=args.listen_host,
+        listen_port=args.listen_port,
+    )
     asyncio.run(serve_forever(gateway))
 
 

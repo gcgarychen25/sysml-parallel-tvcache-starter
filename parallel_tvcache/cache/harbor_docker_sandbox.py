@@ -38,7 +38,9 @@ async def _run(*args: str, check: bool = True) -> tuple[int, str, str]:
 class HarborDockerSandbox(Sandbox):
     """Sandbox = Harbor agent container (+ commit/restore for TVCache)."""
 
-    WORKDIR = os.environ.get("SYSML_TVCACHE_WORKDIR", "/app")
+    # TMax Harbor images have no /app; workspace lives under /home/user.
+    # DeepSWE/other suites can override via SYSML_TVCACHE_WORKDIR.
+    WORKDIR = os.environ.get("SYSML_TVCACHE_WORKDIR", "/home/user")
 
     def __init__(
         self,
@@ -162,8 +164,16 @@ class HarborDockerSandbox(Sandbox):
         if name == "edit":
             # Best-effort: if old/new provided, sed; else fail clearly.
             path = arguments.get("path") or arguments.get("file_path")
-            old = arguments.get("oldText") or arguments.get("old_str")
-            new = arguments.get("newText") or arguments.get("new_str")
+            old = (
+                arguments.get("oldText")
+                or arguments.get("old_str")
+                or arguments.get("oldStr")
+            )
+            new = (
+                arguments.get("newText")
+                or arguments.get("new_str")
+                or arguments.get("newStr")
+            )
             if not path or old is None or new is None:
                 raise ValueError("edit requires path + oldText/newText")
             # Python one-liner for safe replace once.

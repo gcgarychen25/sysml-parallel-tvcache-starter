@@ -70,3 +70,16 @@ Analyze: `bash scripts/analyze_characterization_wave.sh <prefix>` (optional `--b
 - **A3:** `Qwen/Qwen3.8-27B`, thinking=`xhigh`, ~4h wall (job `60724155`). Summary: `…/char-qwen38-27b-clack-t250-xh/pilot_summary.json`. Do not use quarantined `char-qwen38-27b-clack-t250` (`thinking=high` → turn-1 400s).
 - **A3b/B1/B2:** DeepSWE task list `configs/experiment-tasks-easy1.txt`; harness via `SYSML_HARBOR_AGENT` (`pi` vs `mini-swe-agent`) in `scripts/run_harbor_wave.sh`. **A3b not completed.** Flash-Next download: `scripts/download_qwen3_8_flash_next_fp8.py`.
 - **T1/T2 (TMax tasks × Pi harness):** Not DeepSWE tasks; not Mini-SWE. Agent = stock Harbor **`LoopbackPi`** (`SYSML_HARBOR_AGENT=pi`). Tasks = `variants/tmax-easy/tasks/` (from HF `TMaxxx/TMax-15K-Harbor` short+bash-only). Reproduce T2: `set -a && source configs/models/qwen3.8-27b-tmax-easy10-pi.env.example && set +a` then `bash scripts/run_experiment.sh none` (**no** `--parallel-test`). Valid solve set (8): `configs/experiment-tasks-tmax-easy8.txt`. Evidence dir: `results/characterization/tmax-qwen38-27b-easy10-t100-xh/` (older `manifest.json` may still say `purpose=deep-swe-setup-variants-10task` — that string was hardcoded in the runner; fixed to follow `task_root`).
+
+---
+
+## Exp B pilot — sequential TVCache (2026-11-05)
+
+**Not** an Exp A cell. Same matched knobs as T2 / README Table 2 (Harbor+Pi · 27B · pass@5 · 256K/100/xhigh/TP4), mode `sequential` (`TvcacheLoopbackPi` + Mac `tvcache-rust` + TCP tool gateway).
+
+| Pilot wave | Prefix | Tasks | Reward | TVCache tools |
+| --- | --- | --- | --- | --- |
+| easy1 | `tmax-qwen38-27b-easy1-tvcache-seq-t100-xh` | `004783` | **4/5** (+1 `AgentTimeoutError`) | 34 calls · 8 hits |
+| easy2 | `tmax-qwen38-27b-easy2-tvcache-seq-t100-xh` | `004205`, `004019` | **5/5** + **5/5** | 60 calls · 7 hits |
+
+Pooled pilot hit rate **15/94 ≈ 16%**. Ops lessons: Pi↔gateway must be **TCP** (`host.docker.internal:17878`); TMax sandbox workdir **`/home/user`** (not `/app`). Full TMax-8 Exp B wave still open for handout Table 2. Teammate entry: root `README.md`.

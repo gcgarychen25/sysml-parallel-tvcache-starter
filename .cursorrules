@@ -1,6 +1,6 @@
 # SysML Parallel TVCache — project agent rules
 
-Teammate-facing docs: root `README.md` only. Exp A evidence: single `docs/workload_characterization_report.md` (add a table row per new cell). Experiments A/B/C via `bash scripts/run_experiment.sh {none|sequential|parallel|all}` (only `none` implemented today; mode picks one experiment unless `all`). Exp B sequential TVCache can proceed in parallel (stub until tvclient wired).
+Teammate-facing docs: root `README.md` only. Exp A evidence: single `docs/workload_characterization_report.md` (add a table row per new cell). Experiments A/B/C via `bash scripts/run_experiment.sh {none|sequential|parallel|all}` (`none` + `sequential` wired; `parallel` still stub). Mode picks one experiment unless `all`.
 
 ## Deployment boundaries
 
@@ -17,7 +17,15 @@ Teammate-facing docs: root `README.md` only. Exp A evidence: single `docs/worklo
 - DeepSWE/TMax = **task suites**; Pi/Mini-SWE = **harnesses**; Harbor = orchestrator. Exp A DeepSWE reward 0 = task hardness. **T1/T2** = same **Harbor+Pi**, TMax tasks: T1 5/5; T2 **40/40** on 8 valid (exclude `001033` env-timeout, `009942` agent-timeout). Natural Pi only. Not Exp B TVCache.
 - Handout Tables 1–2 in root `README.md` use explicit matched contract: Harbor+Pi · Qwen3.8-27B · 8 ids in `experiment-tasks-tmax-easy8.txt` · pass@5/n=5 · 256K/100 turns/xhigh/TP4. DeepSWE Table 1 row = A3.
 - Exp B sequential: `tvcache-rust` (`scripts/tvcache_server.sh`) + tool gateway (`scripts/tvcache_tool_gateway.sh`) + `TvcacheLoopbackPi`; env `configs/models/qwen3.8-27b-tmax-easy8-tvcache-seq.env.example`; metrics `tvcache-metrics.jsonl`. Keep TVCache up across NERSC alloc recycles.
+- Exp B Pi↔gateway transport: **TCP** `host.docker.internal:17878` (`SYSML_TVCACHE_GATEWAY_PORT`). Do **not** rely on Mac-host AF_UNIX bind-mounted into agent containers — Docker Desktop shows the sock inode but `connect` is ECONNREFUSED (model bridge works because `model.sock` is created inside a Linux Docker volume). Optional Unix listen on the Mac is host-local only.
+- Exp B sandbox workdir: default `SYSML_TVCACHE_WORKDIR=/home/user` (TMax). `/app` does not exist in TMax images and makes every `docker exec -w` fail. Serialize tvclient RPCs in the tool gateway (one stream per connection).
 - Wave `manifest.json` `purpose` follows `SYSML_TASK_ROOT` (tmax vs deep-swe). Analyzer `--benchmark` defaults to the string `DeepSWE` — tag only; pass `--benchmark TMax` for T* summaries.
+
+## Live-run monitoring (no long blind waits)
+
+- Prefer short polls (≈20–45s) over multi-minute AwaitShell. Stall signal = **no new bytes / mtime** on `run-batched.log`, `tool-gateway.log`, or trial `*.jsonl` for >2–3 min while Harbor still says “running agent”, or gateway TCP `:17878` down.
+- Always check: harbor/wave PIDs, `docker ps`, gateway ping, NERSC `squeue`, session ages + last role (thinking vs toolResult). xhigh gaps of ~1–2 min between tools can be normal; silent gateway + silent sessions together is not.
+- If stalled: diagnose/fix/relaunch promptly — do not wait for DONE.
 
 ## Evidence honesty
 

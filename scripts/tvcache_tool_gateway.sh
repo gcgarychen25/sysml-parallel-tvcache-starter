@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Start/stop host tool gateway (Unix socket → tvclient → tvcache-rust).
+# Start/stop host tool gateway (TCP → tvclient → tvcache-rust).
+# Pi agents in Docker reach this via host.docker.internal:SYSML_TVCACHE_GATEWAY_PORT.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -7,6 +8,8 @@ CACHE_DIR="${SYSML_TVCACHE_DIR:-$ROOT/results/tvcache}"
 PID_FILE="$CACHE_DIR/tool-gateway.pid"
 LOG_FILE="$CACHE_DIR/tool-gateway.log"
 SOCK="${SYSML_TVCACHE_SOCK:-$CACHE_DIR/tvcache.sock}"
+LISTEN_HOST="${SYSML_TVCACHE_GATEWAY_HOST:-127.0.0.1}"
+LISTEN_PORT="${SYSML_TVCACHE_GATEWAY_PORT:-17878}"
 PY="${ROOT}/.venv/bin/python"
 [[ -x "$PY" ]] || PY=python3
 export PYTHONPATH="${ROOT}/vendor/tvclient:${ROOT}${PYTHONPATH:+:$PYTHONPATH}"
@@ -24,14 +27,25 @@ case "${1:-}" in
     fi
     bash "$ROOT/scripts/tvcache_server.sh" start
     export SYSML_TVCACHE_SOCK="$SOCK"
-    nohup "$PY" -m parallel_tvcache.cache.tool_gateway --sock "$SOCK" >>"$LOG_FILE" 2>&1 &
+    export SYSML_TVCACHE_GATEWAY_HOST="$LISTEN_HOST"
+    export SYSML_TVCACHE_GATEWAY_PORT="$LISTEN_PORT"
+    export SYSML_TVCACHE_WORKDIR="${SYSML_TVCACHE_WORKDIR:-/home/user}"
+    # Inherit SYSML_TVCACHE_METRICS from wave if set.
+    nohup "$PY" -m parallel_tvcache.cache.tool_gateway \
+      --sock "$SOCK" \
+      --listen-host "$LISTEN_HOST" \
+      --listen-port "$LISTEN_PORT" >>"$LOG_FILE" 2>&1 &
     echo $! >"$PID_FILE"
+    ready=0
     for _ in $(seq 1 50); do
-      [[ -S "$SOCK" ]] && break
+      if "$PY" -c "import socket;s=socket.create_connection(('$LISTEN_HOST',$LISTEN_PORT),0.2);s.close()" 2>/dev/null; then
+        ready=1
+        break
+      fi
       sleep 0.1
     done
-    [[ -S "$SOCK" ]] || { echo "gateway sock missing: $SOCK (see $LOG_FILE)" >&2; exit 1; }
-    echo "STARTED tool gateway pid=$(cat "$PID_FILE") sock=$SOCK"
+    [[ "$ready" == 1 ]] || { echo "gateway TCP not ready on $LISTEN_HOST:$LISTEN_PORT (see $LOG_FILE)" >&2; exit 1; }
+    echo "STARTED tool gateway pid=$(cat "$PID_FILE") tcp=$LISTEN_HOST:$LISTEN_PORT sock=$SOCK"
     ;;
   stop)
     if is_running; then
@@ -46,7 +60,7 @@ case "${1:-}" in
     ;;
   status)
     if is_running; then
-      echo "RUNNING pid=$(cat "$PID_FILE") sock=$SOCK"
+      echo "RUNNING pid=$(cat "$PID_FILE") tcp=$LISTEN_HOST:$LISTEN_PORT sock=$SOCK"
       exit 0
     fi
     echo "STOPPED"

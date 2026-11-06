@@ -106,6 +106,9 @@ if [[ "$CACHE_MODE" == "sequential" ]]; then
   export SYSML_TVCACHE_SOCK="${SYSML_TVCACHE_SOCK:-$SYSML_TVCACHE_DIR/tvcache.sock}"
   export SYSML_TVCACHE_HOST="${SYSML_TVCACHE_HOST:-127.0.0.1}"
   export SYSML_TVCACHE_PORT="${SYSML_TVCACHE_PORT:-7878}"
+  # Pi↔gateway: TCP (Docker Desktop cannot use Mac-host AF_UNIX bind mounts).
+  export SYSML_TVCACHE_GATEWAY_HOST="${SYSML_TVCACHE_GATEWAY_HOST:-127.0.0.1}"
+  export SYSML_TVCACHE_GATEWAY_PORT="${SYSML_TVCACHE_GATEWAY_PORT:-17878}"
 fi
 WAVE_DIR="results/characterization/${PREFIX}"
 LOG="$WAVE_DIR/run-batched.log"
@@ -289,14 +292,14 @@ bridge_up() {
   local compose=".local-smoke/m4999-${job}-compose.json"
   local tvcache_dir="${SYSML_TVCACHE_DIR:-$ROOT/results/tvcache}"
   mkdir -p "$tvcache_dir"
-  python3 - "$compose" "$vol" "$CACHE_MODE" "$tvcache_dir" <<'PY'
+  # Model sock lives in a Docker volume (Linux↔Linux). TVCache tools use TCP to
+  # host.docker.internal — Mac-host AF_UNIX bind-mounts do not accept connects.
+  python3 - "$compose" "$vol" <<'PY'
 import json, sys
 from pathlib import Path
-compose, vol, mode, tvdir = sys.argv[1:5]
+compose, vol = sys.argv[1:3]
 vols = [{"type": "volume", "source": "model-bridge", "target": "/run/sysml-model", "read_only": True}]
 named = {"model-bridge": {"external": True, "name": vol}}
-if mode == "sequential":
-    vols.append({"type": "bind", "source": tvdir, "target": "/run/sysml-tvcache"})
 Path(compose).write_text(json.dumps({"services": {"main": {"volumes": vols}}, "volumes": named}) + "\n")
 PY
   mkdir -p "results/m4999-${job}-model-records"
@@ -395,7 +398,9 @@ run_task() {
       --ak "max_turns=${SYSML_MAX_TURNS}"
     )
   fi
-  PYTHONPATH="$ROOT" "${harbor_cmd[@]}" | tee -a "$LOG"
+  # vendor/tvclient required for TvcacheLoopbackPi / sequential adapters.
+  PYTHONPATH="$ROOT/vendor/tvclient:$ROOT${PYTHONPATH:+:$PYTHONPATH}" \
+    "${harbor_cmd[@]}" | tee -a "$LOG"
   .venv/bin/python scripts/check_trial.py "jobs/$job_name" || true
 }
 
